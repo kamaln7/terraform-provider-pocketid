@@ -89,8 +89,9 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Required:    true,
 			},
 			"email": schema.StringAttribute{
-				Description: "The email address of the user.",
-				Required:    true,
+				Description: "The email address of the user. Only optional when Pocket-ID does not require user emails " +
+					"(the `require_user_email` application setting, or `REQUIRE_USER_EMAIL=false`).",
+				Optional: true,
 				Validators: []validator.String{
 					stringvalidator.RegexMatches(
 						regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`),
@@ -258,9 +259,9 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 	// Set state values from API response
 	plan.ID = types.StringValue(userResp.ID)
 	plan.Username = types.StringValue(userResp.Username)
-	plan.Email = types.StringValue(userResp.Email)
-	plan.FirstName = types.StringValue(userResp.FirstName)
-	plan.LastName = types.StringValue(userResp.LastName)
+	plan.Email = optionalAttribute(plan.Email, userResp.Email)
+	plan.FirstName = optionalAttribute(plan.FirstName, userResp.FirstName)
+	plan.LastName = optionalAttribute(plan.LastName, userResp.LastName)
 	plan.DisplayName = types.StringValue(userResp.DisplayName)
 	plan.EmailVerified = types.BoolValue(userResp.EmailVerified)
 	plan.IsAdmin = types.BoolValue(userResp.IsAdmin)
@@ -375,9 +376,9 @@ func (r *userResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	// Update state from API response
 	state.Username = types.StringValue(userResp.Username)
-	state.Email = types.StringValue(userResp.Email)
-	state.FirstName = types.StringValue(userResp.FirstName)
-	state.LastName = types.StringValue(userResp.LastName)
+	state.Email = optionalAttribute(state.Email, userResp.Email)
+	state.FirstName = optionalAttribute(state.FirstName, userResp.FirstName)
+	state.LastName = optionalAttribute(state.LastName, userResp.LastName)
 	state.DisplayName = types.StringValue(userResp.DisplayName)
 	state.EmailVerified = types.BoolValue(userResp.EmailVerified)
 	state.IsAdmin = types.BoolValue(userResp.IsAdmin)
@@ -481,9 +482,9 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 	// Update state values from API response
 	plan.Username = types.StringValue(userResp.Username)
-	plan.Email = types.StringValue(userResp.Email)
-	plan.FirstName = types.StringValue(userResp.FirstName)
-	plan.LastName = types.StringValue(userResp.LastName)
+	plan.Email = optionalAttribute(plan.Email, userResp.Email)
+	plan.FirstName = optionalAttribute(plan.FirstName, userResp.FirstName)
+	plan.LastName = optionalAttribute(plan.LastName, userResp.LastName)
 	plan.DisplayName = types.StringValue(userResp.DisplayName)
 	plan.EmailVerified = types.BoolValue(userResp.EmailVerified)
 	plan.IsAdmin = types.BoolValue(userResp.IsAdmin)
@@ -595,6 +596,19 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	// Set the state
 	diags = resp.State.Set(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
+}
+
+// optionalAttribute maps a string Pocket-ID returns onto an optional
+// attribute. Pocket-ID returns an empty string for a value that is not set, so
+// that is null, unless the prior value was an empty string.
+func optionalAttribute(prior types.String, value string) types.String {
+	if value != "" {
+		return types.StringValue(value)
+	}
+	if !prior.IsNull() && !prior.IsUnknown() && prior.ValueString() == "" {
+		return prior
+	}
+	return types.StringNull()
 }
 
 // uploadProfilePicture uploads the file a planned profile_picture points at

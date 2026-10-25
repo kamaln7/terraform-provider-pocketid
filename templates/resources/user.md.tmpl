@@ -109,7 +109,19 @@ resource "pocketid_user" "with_picture" {
     source = "${path.module}/avatars/picture.user.png"
   }
 }
+
+# Create a user without an email. Pocket ID accepts this only when it does not
+# require user emails (the `require_user_email` application setting, or
+# `REQUIRE_USER_EMAIL=false`).
+resource "pocketid_user" "no_email" {
+  username     = "no.email"
+  display_name = "No Email"
+}
 ```
+
+## Email
+
+`email` is optional so that a user can exist with only a username and a display name. Pocket ID refuses such a user while it requires emails, and the error is reported when the user is created or updated. Removing `email` from a user that has one clears it.
 
 ## Profile picture
 
