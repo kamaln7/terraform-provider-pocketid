@@ -28,6 +28,10 @@ const (
 	// MinVersionClientSecretsEndpoint is the first version that serves the
 	// plural /secrets endpoint, which replaced /secret.
 	MinVersionClientSecretsEndpoint = "2.14.0"
+
+	// MinVersionFederatedPublicKeys is the first version that accepts public
+	// keys on a federated identity.
+	MinVersionFederatedPublicKeys = "2.15.0"
 )
 
 const contentTypeJSON = "application/json"

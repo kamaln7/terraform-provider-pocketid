@@ -5,7 +5,9 @@ package provider_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -988,6 +990,150 @@ func TestAccResourceClient_logoURLRejected(t *testing.T) {
 				PlanOnly: true,
 				// A new resource always has a pending create.
 				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}
+
+// Ed25519 public keys for the federated identity tests. Their members are
+// deliberately not in the sorted, compact form Pocket ID returns them in.
+const (
+	testAccFederatedKey1 = `{ "kty": "OKP", "crv": "Ed25519", "kid": "key-1", "x": "yvYSrUQ7W-ZdbgGplSlqbqdVj8nDC074evhHLOUiKJM" }`
+	testAccFederatedKey2 = `{ "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo", "kty": "OKP", "kid": "key-2", "crv": "Ed25519", "use": "sig" }`
+)
+
+func testAccResourceClientConfig_federatedPublicKeys(name string, replayProtection bool, keys ...string) string {
+	var rendered strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&rendered, "        %q,\n", key)
+	}
+	return fmt.Sprintf(`
+resource "pocketid_client" "test" {
+  name          = %[1]q
+  callback_urls = ["https://example.com/callback"]
+
+  federated_identities = [
+    {
+      issuer            = "urn:example:issuer"
+      replay_protection = %[2]t
+      public_keys = [
+%[3]s      ]
+    },
+  ]
+}
+`, name, replayProtection, rendered.String())
+}
+
+// TestAccResourceClient_federatedPublicKeys checks that public keys and replay
+// protection reach Pocket ID, compare by their JSON value rather than their
+// text, and can be changed and imported.
+func TestAccResourceClient_federatedPublicKeys(t *testing.T) {
+	resourceName := "pocketid_client.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceClientConfig_federatedPublicKeys("fed-keys", true, testAccFederatedKey1),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.0.issuer", "urn:example:issuer"),
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.0.replay_protection", "true"),
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.0.public_keys.#", "1"),
+					resource.TestCheckNoResourceAttr(resourceName, "federated_identities.0.jwks"),
+				),
+			},
+			// Imported keys come back in Pocket ID's encoding, which differs
+			// from the configured text, so they are compared as JSON below.
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"client_secret", "client_secret_id", "federated_identities.0.public_keys",
+				},
+				ImportStateCheck: func(states []*terraform.InstanceState) error {
+					if len(states) != 1 {
+						return fmt.Errorf("expected 1 imported resource, got %d", len(states))
+					}
+					got := states[0].Attributes["federated_identities.0.public_keys.0"]
+					var gotKey, wantKey map[string]any
+					if err := json.Unmarshal([]byte(got), &gotKey); err != nil {
+						return fmt.Errorf("imported key is not JSON: %w", err)
+					}
+					if err := json.Unmarshal([]byte(testAccFederatedKey1), &wantKey); err != nil {
+						return err
+					}
+					if !reflect.DeepEqual(gotKey, wantKey) {
+						return fmt.Errorf("imported key %s does not match %s", got, testAccFederatedKey1)
+					}
+					return nil
+				},
+			},
+			// A second key, in place, with replay protection off.
+			{
+				Config: testAccResourceClientConfig_federatedPublicKeys("fed-keys", false, testAccFederatedKey1, testAccFederatedKey2),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.0.replay_protection", "false"),
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.0.public_keys.#", "2"),
+				),
+			},
+			// Removing the identities clears them.
+			{
+				Config: testAccResourceClientConfig_basic("fed-keys", "https://example.com/callback"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "federated_identities.#", "0"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccResourceClient_federatedPublicKeysConflictJWKS checks that a JWKS URL
+// and public keys cannot be combined.
+func TestAccResourceClient_federatedPublicKeysConflictJWKS(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "pocketid_client" "test" {
+  name          = "fed-conflict"
+  callback_urls = ["https://example.com/callback"]
+
+  federated_identities = [
+    {
+      issuer      = "urn:example:issuer"
+      jwks        = "https://issuer.example.com/jwks"
+      public_keys = ["{\"kty\":\"OKP\"}"]
+    },
+  ]
+}
+`,
+				ExpectError: regexp.MustCompile(`(?s)public_keys.*jwks|jwks.*public_keys`),
+			},
+		},
+	})
+}
+
+// TestAccResourceClient_federatedPublicKeyRejected checks that a key Pocket ID
+// refuses, here one without a key ID, fails the apply.
+func TestAccResourceClient_federatedPublicKeyRejected(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceClientConfig_federatedPublicKeys("fed-no-kid", false,
+					`{"kty":"OKP","crv":"Ed25519","x":"yvYSrUQ7W-ZdbgGplSlqbqdVj8nDC074evhHLOUiKJM"}`),
+				ExpectError: regexp.MustCompile(`kid`),
 			},
 		},
 	})

@@ -2,11 +2,13 @@ package resources
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -105,18 +107,22 @@ type clientResourceModel struct {
 
 // clientFederatedIdentityModel maps a single federated identity nested object.
 type clientFederatedIdentityModel struct {
-	Issuer   types.String `tfsdk:"issuer"`
-	Subject  types.String `tfsdk:"subject"`
-	Audience types.String `tfsdk:"audience"`
-	JWKS     types.String `tfsdk:"jwks"`
+	Issuer           types.String `tfsdk:"issuer"`
+	Subject          types.String `tfsdk:"subject"`
+	Audience         types.String `tfsdk:"audience"`
+	JWKS             types.String `tfsdk:"jwks"`
+	PublicKeys       types.List   `tfsdk:"public_keys"`
+	ReplayProtection types.Bool   `tfsdk:"replay_protection"`
 }
 
 // federatedIdentityAttrTypes is the attribute-type map for a federated identity object.
 var federatedIdentityAttrTypes = map[string]attr.Type{
-	"issuer":   types.StringType,
-	"subject":  types.StringType,
-	"audience": types.StringType,
-	"jwks":     types.StringType,
+	"issuer":            types.StringType,
+	"subject":           types.StringType,
+	"audience":          types.StringType,
+	"jwks":              types.StringType,
+	"public_keys":       types.ListType{ElemType: jsontypes.NormalizedType{}},
+	"replay_protection": types.BoolType,
 }
 
 // Metadata returns the resource type name.
@@ -261,8 +267,27 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 							Optional:    true,
 						},
 						"jwks": schema.StringAttribute{
-							Description: "Optional JWKS used to validate the federated identity token.",
+							Description: "URL of a JWKS used to validate the federated identity token. Cannot be combined with " +
+								"public_keys. When neither is set, Pocket-ID fetches the JWKS from `<issuer>/.well-known/jwks.json`.",
+							Optional: true,
+						},
+						"public_keys": schema.ListAttribute{
+							Description: "Public keys, as JWK JSON documents, used to validate the federated identity token. " +
+								"No network fetch is made. Each key must have a `kid` and must not include private key " +
+								"material. Cannot be combined with jwks. Requires Pocket-ID 2.15.0 or later.",
 							Optional:    true,
+							ElementType: jsontypes.NormalizedType{},
+							Validators: []validator.List{
+								listvalidator.SizeAtLeast(1),
+								listvalidator.ConflictsWith(path.MatchRelative().AtParent().AtName("jwks")),
+							},
+						},
+						"replay_protection": schema.BoolAttribute{
+							Description: "Whether Pocket-ID refuses a token whose `jti` it has already seen, so each token " +
+								"can be used once. Tokens without a `jti` are then rejected. Defaults to false.",
+							Optional: true,
+							Computed: true,
+							Default:  booldefault.StaticBool(false),
 						},
 					},
 				},
@@ -364,6 +389,17 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 		if err := r.client.RequireMinVersion("setting a custom client_secret", client.MinVersionCustomClientSecret); err != nil {
 			resp.Diagnostics.AddAttributeError(
 				path.Root("client_secret"),
+				"Pocket ID version too old",
+				err.Error(),
+			)
+			return
+		}
+	}
+
+	if federatedIdentitiesUsePublicKeys(ctx, &plan) {
+		if err := r.client.RequireMinVersion("federated_identities public_keys", client.MinVersionFederatedPublicKeys); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("federated_identities"),
 				"Pocket ID version too old",
 				err.Error(),
 			)
@@ -654,6 +690,17 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	if federatedIdentitiesUsePublicKeys(ctx, &plan) {
+		if err := r.client.RequireMinVersion("federated_identities public_keys", client.MinVersionFederatedPublicKeys); err != nil {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("federated_identities"),
+				"Pocket ID version too old",
+				err.Error(),
+			)
+			return
+		}
 	}
 
 	// Convert from Terraform types to Go types
@@ -1016,14 +1063,68 @@ func buildCredentialsFromPlan(ctx context.Context, plan *clientResourceModel) cl
 	federated := make([]client.OIDCClientFederatedIdentity, 0, len(identities))
 	for _, identity := range identities {
 		federated = append(federated, client.OIDCClientFederatedIdentity{
-			Issuer:   identity.Issuer.ValueString(),
-			Subject:  identity.Subject.ValueString(),
-			Audience: identity.Audience.ValueString(),
-			JWKS:     identity.JWKS.ValueString(),
+			Issuer:           identity.Issuer.ValueString(),
+			Subject:          identity.Subject.ValueString(),
+			Audience:         identity.Audience.ValueString(),
+			JWKS:             identity.JWKS.ValueString(),
+			PublicKeys:       federatedPublicKeysFromList(ctx, identity.PublicKeys),
+			ReplayProtection: identity.ReplayProtection.ValueBool(),
 		})
 	}
 
 	return client.OIDCClientCredentials{FederatedIdentities: federated}
+}
+
+// federatedIdentitiesUsePublicKeys reports whether any planned federated
+// identity sets public_keys.
+func federatedIdentitiesUsePublicKeys(ctx context.Context, plan *clientResourceModel) bool {
+	if plan.FederatedIdentities.IsNull() || plan.FederatedIdentities.IsUnknown() {
+		return false
+	}
+
+	var identities []clientFederatedIdentityModel
+	_ = plan.FederatedIdentities.ElementsAs(ctx, &identities, false)
+
+	for _, identity := range identities {
+		if !identity.PublicKeys.IsNull() {
+			return true
+		}
+	}
+	return false
+}
+
+// federatedPublicKeysFromList converts the public_keys list into the JWKs
+// sent to the API.
+func federatedPublicKeysFromList(ctx context.Context, keys types.List) []json.RawMessage {
+	if keys.IsNull() || keys.IsUnknown() {
+		return nil
+	}
+
+	var values []string
+	_ = keys.ElementsAs(ctx, &values, false)
+
+	raw := make([]json.RawMessage, 0, len(values))
+	for _, value := range values {
+		raw = append(raw, json.RawMessage(value))
+	}
+	return raw
+}
+
+// federatedPublicKeysToList converts the JWKs Pocket-ID returns into the
+// public_keys list. Each key compares by its JSON value, so the sorted
+// encoding Pocket-ID returns does not differ from the configured one.
+func federatedPublicKeysToList(ctx context.Context, keys []json.RawMessage) types.List {
+	if len(keys) == 0 {
+		return types.ListNull(jsontypes.NormalizedType{})
+	}
+
+	values := make([]string, 0, len(keys))
+	for _, key := range keys {
+		values = append(values, string(key))
+	}
+
+	list, _ := types.ListValueFrom(ctx, jsontypes.NormalizedType{}, values)
+	return list
 }
 
 // federatedIdentitiesToList converts API federated identities into a Terraform list value.
@@ -1036,10 +1137,12 @@ func federatedIdentitiesToList(ctx context.Context, identities []client.OIDCClie
 	models := make([]clientFederatedIdentityModel, 0, len(identities))
 	for _, identity := range identities {
 		models = append(models, clientFederatedIdentityModel{
-			Issuer:   types.StringValue(identity.Issuer),
-			Subject:  optionalString(identity.Subject),
-			Audience: optionalString(identity.Audience),
-			JWKS:     optionalString(identity.JWKS),
+			Issuer:           types.StringValue(identity.Issuer),
+			Subject:          optionalString(identity.Subject),
+			Audience:         optionalString(identity.Audience),
+			JWKS:             optionalString(identity.JWKS),
+			PublicKeys:       federatedPublicKeysToList(ctx, identity.PublicKeys),
+			ReplayProtection: types.BoolValue(identity.ReplayProtection),
 		})
 	}
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/Trozz/terraform-provider-pocketid/internal/resources"
@@ -76,6 +77,19 @@ func TestClientResource_Schema(t *testing.T) {
 	fedAttr, ok := schemaResponse.Schema.Attributes["federated_identities"]
 	assert.True(t, ok, "federated_identities attribute should exist")
 	assert.True(t, fedAttr.IsOptional(), "federated_identities should be optional")
+
+	fedNested, ok := fedAttr.(schema.ListNestedAttribute)
+	if assert.True(t, ok, "federated_identities should be a list of nested attributes") {
+		publicKeys, ok := fedNested.NestedObject.Attributes["public_keys"]
+		assert.True(t, ok, "federated_identities.public_keys attribute should exist")
+		assert.True(t, publicKeys.IsOptional(), "public_keys should be optional")
+		assert.False(t, publicKeys.IsComputed(), "public_keys should not be computed")
+
+		replayProtection, ok := fedNested.NestedObject.Attributes["replay_protection"]
+		assert.True(t, ok, "federated_identities.replay_protection attribute should exist")
+		assert.True(t, replayProtection.IsOptional(), "replay_protection should be optional")
+		assert.True(t, replayProtection.IsComputed(), "replay_protection should default to false")
+	}
 
 	for _, name := range []string{"logo_url", "dark_logo_url"} {
 		attr, ok := schemaResponse.Schema.Attributes[name]

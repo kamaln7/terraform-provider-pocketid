@@ -2,13 +2,19 @@ package resources
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/Trozz/terraform-provider-pocketid/internal/client"
 )
+
+// testJWK is an Ed25519 public key as Pocket ID returns it: keys sorted, with
+// the key ID the server requires.
+const testJWK = `{"alg":"EdDSA","crv":"Ed25519","kid":"test-key","kty":"OKP","use":"sig","x":"yvYSrUQ7W-ZdbgGplSlqbqdVj8nDC074evhHLOUiKJM"}`
 
 func TestBuildCreateRequestFromPlan(t *testing.T) {
 	ctx := context.Background()
@@ -20,12 +26,19 @@ func TestBuildCreateRequestFromPlan(t *testing.T) {
 
 	launch := "https://example.com/launch"
 
+	keys, diags := types.ListValueFrom(ctx, jsontypes.NormalizedType{}, []string{testJWK})
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+
 	fedList, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: federatedIdentityAttrTypes}, []clientFederatedIdentityModel{
 		{
-			Issuer:   types.StringValue("https://issuer.example.com"),
-			Subject:  types.StringValue("subject-1"),
-			Audience: types.StringValue("audience-1"),
-			JWKS:     types.StringNull(),
+			Issuer:           types.StringValue("https://issuer.example.com"),
+			Subject:          types.StringValue("subject-1"),
+			Audience:         types.StringValue("audience-1"),
+			JWKS:             types.StringNull(),
+			PublicKeys:       keys,
+			ReplayProtection: types.BoolValue(true),
 		},
 	})
 	if diags.HasError() {
@@ -60,6 +73,10 @@ func TestBuildCreateRequestFromPlan(t *testing.T) {
 		assert.Equal(t, "subject-1", req.Credentials.FederatedIdentities[0].Subject)
 		assert.Equal(t, "audience-1", req.Credentials.FederatedIdentities[0].Audience)
 		assert.Equal(t, "", req.Credentials.FederatedIdentities[0].JWKS)
+		assert.True(t, req.Credentials.FederatedIdentities[0].ReplayProtection)
+		if assert.Len(t, req.Credentials.FederatedIdentities[0].PublicKeys, 1) {
+			assert.JSONEq(t, testJWK, string(req.Credentials.FederatedIdentities[0].PublicKeys[0]))
+		}
 	}
 }
 
@@ -81,7 +98,12 @@ func TestMapAPIClientToModel(t *testing.T) {
 		AllowedUserGroups:        []client.UserGroup{{ID: "g1"}},
 		Credentials: client.OIDCClientCredentials{
 			FederatedIdentities: []client.OIDCClientFederatedIdentity{
-				{Issuer: "https://issuer.example.com", Subject: "subject-1"},
+				{
+					Issuer:           "https://issuer.example.com",
+					Subject:          "subject-1",
+					PublicKeys:       []json.RawMessage{json.RawMessage(testJWK)},
+					ReplayProtection: true,
+				},
 			},
 		},
 	}
@@ -116,6 +138,12 @@ func TestMapAPIClientToModel(t *testing.T) {
 		assert.Equal(t, "subject-1", fed[0].Subject.ValueString())
 		assert.True(t, fed[0].Audience.IsNull())
 		assert.True(t, fed[0].JWKS.IsNull())
+		assert.True(t, fed[0].ReplayProtection.ValueBool())
+		var gotKeys []string
+		_ = fed[0].PublicKeys.ElementsAs(ctx, &gotKeys, false)
+		if assert.Len(t, gotKeys, 1) {
+			assert.JSONEq(t, testJWK, gotKeys[0])
+		}
 	}
 }
 
@@ -176,6 +204,62 @@ func TestBuildCreateRequestFromPlanNoCallbackURLs(t *testing.T) {
 	})
 
 	assert.Empty(t, req.CallbackURLs)
+}
+
+func TestMapAPIClientToModelFederatedIdentityWithoutKeys(t *testing.T) {
+	ctx := context.Background()
+
+	api := &client.OIDCClient{
+		ID:           "client-3",
+		Name:         "Fed JWKS",
+		CallbackURLs: []string{"https://example.com/callback"},
+		Credentials: client.OIDCClientCredentials{
+			FederatedIdentities: []client.OIDCClientFederatedIdentity{
+				{Issuer: "https://issuer.example.com", JWKS: "https://issuer.example.com/jwks"},
+			},
+		},
+	}
+
+	model := mapAPIClientToModel(ctx, api)
+
+	var fed []clientFederatedIdentityModel
+	_ = model.FederatedIdentities.ElementsAs(ctx, &fed, false)
+	if assert.Len(t, fed, 1) {
+		assert.Equal(t, "https://issuer.example.com/jwks", fed[0].JWKS.ValueString())
+		assert.True(t, fed[0].PublicKeys.IsNull())
+		assert.False(t, fed[0].ReplayProtection.ValueBool())
+		assert.False(t, fed[0].ReplayProtection.IsNull())
+	}
+}
+
+func TestFederatedIdentitiesUsePublicKeys(t *testing.T) {
+	ctx := context.Background()
+
+	build := func(keys types.List) *clientResourceModel {
+		list, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: federatedIdentityAttrTypes}, []clientFederatedIdentityModel{
+			{
+				Issuer:           types.StringValue("https://issuer.example.com"),
+				Subject:          types.StringNull(),
+				Audience:         types.StringNull(),
+				JWKS:             types.StringNull(),
+				PublicKeys:       keys,
+				ReplayProtection: types.BoolValue(false),
+			},
+		})
+		if diags.HasError() {
+			t.Fatalf("diags: %v", diags)
+		}
+		return &clientResourceModel{FederatedIdentities: list}
+	}
+
+	withKeys, diags := types.ListValueFrom(ctx, jsontypes.NormalizedType{}, []string{testJWK})
+	if diags.HasError() {
+		t.Fatalf("diags: %v", diags)
+	}
+
+	assert.True(t, federatedIdentitiesUsePublicKeys(ctx, build(withKeys)))
+	assert.False(t, federatedIdentitiesUsePublicKeys(ctx, build(types.ListNull(jsontypes.NormalizedType{}))))
+	assert.False(t, federatedIdentitiesUsePublicKeys(ctx, &clientResourceModel{FederatedIdentities: types.ListNull(types.ObjectType{AttrTypes: federatedIdentityAttrTypes})}))
 }
 
 func TestLogoFlag(t *testing.T) {
