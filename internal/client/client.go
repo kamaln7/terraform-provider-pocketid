@@ -536,6 +536,17 @@ func (c *Client) DeleteClientLogo(clientID string, light bool) error {
 	return err
 }
 
+// UpdateClientLogo uploads the light (or, with light false, the dark) logo of
+// an OIDC client. Pocket ID picks the image type from the file name.
+func (c *Client) UpdateClientLogo(clientID string, light bool, filename string, data []byte) error {
+	contentType, body, err := multipartFile("file", filename, data)
+	if err != nil {
+		return err
+	}
+	_, err = c.doRawRequest(context.Background(), http.MethodPost, fmt.Sprintf("/api/oidc/clients/%s/logo?light=%t", clientID, light), contentType, body)
+	return err
+}
+
 // ListClientSecrets returns the secrets of an OIDC client without their values.
 // Only available from Pocket ID 2.14.0.
 func (c *Client) ListClientSecrets(clientID string) ([]ClientSecret, error) {

@@ -76,6 +76,13 @@ func TestClientResource_Schema(t *testing.T) {
 	hasDarkLogoAttr, ok := schemaResponse.Schema.Attributes["has_dark_logo"]
 	assert.True(t, ok, "has_dark_logo attribute should exist")
 	assert.True(t, hasDarkLogoAttr.IsComputed(), "has_dark_logo should be computed")
+
+	for _, name := range []string{"logo", "dark_logo"} {
+		attr, ok := schemaResponse.Schema.Attributes[name]
+		assert.True(t, ok, "%s attribute should exist", name)
+		assert.True(t, attr.IsOptional(), "%s should be optional", name)
+		assert.False(t, attr.IsComputed(), "%s should not be computed", name)
+	}
 }
 
 func TestGroupResource_Schema(t *testing.T) {

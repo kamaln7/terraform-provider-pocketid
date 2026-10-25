@@ -147,17 +147,7 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"profile_picture": schema.SingleNestedAttribute{
 				Description: "The user's profile picture.",
 				Optional:    true,
-				Attributes: map[string]schema.Attribute{
-					"source": schema.StringAttribute{
-						Description: "Path to the image file.",
-						Required:    true,
-					},
-					"sha256": schema.StringAttribute{
-						Description:   "SHA-256 of the image file, computed at plan time.",
-						Computed:      true,
-						PlanModifiers: []planmodifier.String{sourceFileSHA256PlanModifier{}},
-					},
-				},
+				Attributes:  sourceFileAttributes("Path to the image file."),
 			},
 		},
 	}

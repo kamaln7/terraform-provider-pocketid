@@ -143,6 +143,22 @@ resource "pocketid_client" "grafana" {
   dark_logo_url = "https://cdn.jsdelivr.net/gh/selfhst/icons/svg/grafana-light.svg"
 }
 
+# Upload the client's logos from image files
+resource "pocketid_client" "karakeep" {
+  name = "Karakeep"
+
+  callback_urls = [
+    "https://keep.example.com/api/auth/callback/custom"
+  ]
+
+  logo = {
+    source = "${path.module}/logos/karakeep.svg"
+  }
+  dark_logo = {
+    source = "${path.module}/logos/karakeep-dark.svg"
+  }
+}
+
 # Store the client secret securely
 resource "pocketid_client" "api_client" {
   name = "API Service Client"
@@ -173,5 +189,11 @@ output "spa_client_id" {
 - **Not set means not managed.** A logo added in the Pocket ID UI is left untouched while the URL is absent from the configuration.
 - **Removing** a URL that Terraform set deletes that logo.
 - A logo deleted in the UI is set again on the next apply. A changed image at the same URL is not detected; change the URL to refresh it.
+
+`logo` and `dark_logo` upload an image file instead, so Pocket ID does not need to reach it. They behave like the URLs, with these differences:
+
+- Pocket ID picks the image type from the file's extension and accepts files up to 2 MiB.
+- The file's SHA-256 is part of the plan, so editing the file uploads the new image at the next apply.
+- `logo` cannot be combined with `logo_url`, nor `dark_logo` with `dark_logo_url`.
 
 {{ .SchemaMarkdown | trimspace }}
