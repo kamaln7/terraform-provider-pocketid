@@ -60,22 +60,9 @@ else
             aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        # Default to the latest stable pocket-id release so CI tests what most
-        # users run. Override with POCKET_ID_VERSION (e.g. for a reproducible
-        # local run); fall back to a known-good version if the release API is
-        # unavailable (e.g. rate limited).
-        if [ -z "$POCKET_ID_VERSION" ]; then
-            GH_AUTH=()
-            TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-            [ -n "$TOKEN" ] && GH_AUTH=(-H "Authorization: Bearer $TOKEN")
-            POCKET_ID_VERSION=$(curl -fsSL "${GH_AUTH[@]}" \
-                https://api.github.com/repos/pocket-id/pocket-id/releases/latest 2>/dev/null \
-                | grep '"tag_name":' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-            if [ -z "$POCKET_ID_VERSION" ]; then
-                echo "Could not resolve latest pocket-id release; falling back to v2.16.0"
-                POCKET_ID_VERSION="v2.16.0"
-            fi
-        fi
+        # The provider supports the latest Pocket ID release only, so the tests
+        # run against that one. Override with POCKET_ID_VERSION to try another.
+        POCKET_ID_VERSION="${POCKET_ID_VERSION:-v2.19.1}"
         echo "Using pocket-id version: $POCKET_ID_VERSION"
 
         # Release assets are named pocket-id_<os>_<arch> since v2.10.0.
