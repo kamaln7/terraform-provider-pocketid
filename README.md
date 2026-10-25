@@ -129,6 +129,8 @@ resource "pocketid_user" "john_doe" {
 - `pocketid_client` - Manages OIDC client applications
 - `pocketid_user` - Manages user accounts
 - `pocketid_group` - Manages user groups
+- `pocketid_api` - Manages APIs (resource servers) and their permissions
+- `pocketid_api_client_access` - Manages which permissions a client may request for an API
 
 ### Available Data Sources
 
