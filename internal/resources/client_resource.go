@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -94,6 +95,7 @@ type clientResourceModel struct {
 	LogoURL                             types.String `tfsdk:"logo_url"`
 	DarkLogoURL                         types.String `tfsdk:"dark_logo_url"`
 	RequiresReauthentication            types.Bool   `tfsdk:"requires_reauthentication"`
+	SkipConsent                         types.Bool   `tfsdk:"skip_consent"`
 	RequiresPushedAuthorizationRequests types.Bool   `tfsdk:"requires_pushed_authorization_requests"`
 	LaunchURL                           types.String `tfsdk:"launch_url"`
 	FederatedIdentities                 types.List   `tfsdk:"federated_identities"`
@@ -206,6 +208,16 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(false),
+			},
+			"skip_consent": schema.BoolAttribute{
+				Description: "Whether users skip the consent screen when signing in to this client. When not set, " +
+					"the value is not managed: a value changed in Pocket-ID is kept and read back into state, " +
+					"and a new client requires consent.",
+				Optional: true,
+				Computed: true,
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"requires_pushed_authorization_requests": schema.BoolAttribute{
 				Description: "Whether this client requires Pushed Authorization Requests (PAR, RFC 9126). Defaults to false. " +
@@ -393,6 +405,7 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 	plan.ID = apiModel.ID
 	plan.HasLogo = apiModel.HasLogo
 	plan.RequiresReauthentication = apiModel.RequiresReauthentication
+	plan.SkipConsent = apiModel.SkipConsent
 	plan.FederatedIdentities = apiModel.FederatedIdentities
 	plan.LaunchURL = apiModel.LaunchURL
 	// Preserve the configured PAR value when the server does not return the field
@@ -516,6 +529,7 @@ func (r *clientResource) Read(ctx context.Context, req resource.ReadRequest, res
 	state.HasLogo = types.BoolValue(clientResp.HasLogo)
 	state.HasDarkLogo = types.BoolValue(clientResp.HasDarkLogo)
 	state.RequiresReauthentication = types.BoolValue(clientResp.RequiresReauthentication)
+	state.SkipConsent = types.BoolValue(clientResp.SkipConsent)
 	// Only refresh PAR from the API when the server returns the field; otherwise
 	// preserve the existing state value (Pocket-ID <= v2.8.0 omits it). On import
 	// there is no prior value, so fall back to the default of false.
@@ -582,7 +596,6 @@ func (r *clientResource) Read(ctx context.Context, req resource.ReadRequest, res
 // so that updating a managed attribute does not reset them.
 func preserveUnmanagedClientFields(req *client.OIDCClientCreateRequest, current *client.OIDCClient) {
 	req.Description = current.Description
-	req.SkipConsent = current.SkipConsent
 	req.AccessTokenDurationMinutes = current.AccessTokenDurationMinutes
 	req.RefreshTokenDurationMinutes = current.RefreshTokenDurationMinutes
 	req.HasLogo = current.HasLogo
@@ -659,6 +672,7 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 			return nil
 		}(),
 		PkceEnabled:       plan.PkceEnabled.ValueBool(),
+		SkipConsent:       plan.SkipConsent.ValueBool(),
 		IsGroupRestricted: isGroupRestricted,
 		Credentials:       buildCredentialsFromPlan(ctx, &plan),
 	}
@@ -669,8 +683,8 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	// The update endpoint replaces the client in full, so settings the
 	// provider does not expose have to be read back and sent unchanged.
-	// Without this they are reset: a description is cleared, skip_consent
-	// reverts to false and the token durations fall back to their defaults.
+	// Without this they are reset: a description is cleared and the token
+	// durations fall back to their defaults.
 	current, err := r.client.GetClient(plan.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -722,6 +736,7 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 	plan.HasLogo = logoFlag(plan.LogoURL, state.LogoURL, clientResp.HasLogo)
 	plan.HasDarkLogo = logoFlag(plan.DarkLogoURL, state.DarkLogoURL, clientResp.HasDarkLogo)
 	plan.RequiresReauthentication = types.BoolValue(clientResp.RequiresReauthentication)
+	plan.SkipConsent = types.BoolValue(clientResp.SkipConsent)
 	plan.FederatedIdentities = federatedIdentitiesToList(ctx, clientResp.Credentials.FederatedIdentities)
 	// Preserve the configured PAR value unless the server returns the field.
 	if clientResp.RequiresPushedAuthorizationRequests != nil {
@@ -953,6 +968,7 @@ func buildCreateRequestFromPlan(ctx context.Context, plan *clientResourceModel) 
 		LogoutCallbackURLs:                  logoutCallbackURLs,
 		IsPublic:                            plan.IsPublic.ValueBool(),
 		RequiresReauthentication:            plan.RequiresReauthentication.ValueBool(),
+		SkipConsent:                         plan.SkipConsent.ValueBool(),
 		RequiresPushedAuthorizationRequests: plan.RequiresPushedAuthorizationRequests.ValueBool(),
 		LaunchURL:                           launchPtr,
 		PkceEnabled:                         plan.PkceEnabled.ValueBool(),
@@ -1026,6 +1042,7 @@ func mapAPIClientToModel(ctx context.Context, api *client.OIDCClient) clientReso
 	model.HasLogo = types.BoolValue(api.HasLogo)
 	model.HasDarkLogo = types.BoolValue(api.HasDarkLogo)
 	model.RequiresReauthentication = types.BoolValue(api.RequiresReauthentication)
+	model.SkipConsent = types.BoolValue(api.SkipConsent)
 	model.FederatedIdentities = federatedIdentitiesToList(ctx, api.Credentials.FederatedIdentities)
 
 	callbackURLs, _ := types.ListValueFrom(ctx, types.StringType, api.CallbackURLs)

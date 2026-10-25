@@ -38,6 +38,7 @@ func TestBuildCreateRequestFromPlan(t *testing.T) {
 		IsPublic:                 types.BoolValue(false),
 		PkceEnabled:              types.BoolValue(true),
 		RequiresReauthentication: types.BoolValue(true),
+		SkipConsent:              types.BoolValue(true),
 		LaunchURL:                types.StringValue(launch),
 		FederatedIdentities:      fedList,
 	}
@@ -50,6 +51,7 @@ func TestBuildCreateRequestFromPlan(t *testing.T) {
 	assert.Equal(t, "Test Client", req.Name)
 	assert.Equal(t, []string{"https://example.com/callback"}, req.CallbackURLs)
 	assert.True(t, req.RequiresReauthentication)
+	assert.True(t, req.SkipConsent)
 	if assert.NotNil(t, req.LaunchURL) {
 		assert.Equal(t, launch, *req.LaunchURL)
 	}
@@ -74,6 +76,7 @@ func TestMapAPIClientToModel(t *testing.T) {
 		HasLogo:                  false,
 		HasDarkLogo:              true,
 		RequiresReauthentication: true,
+		SkipConsent:              true,
 		LaunchURL:                "https://example.com/launch",
 		AllowedUserGroups:        []client.UserGroup{{ID: "g1"}},
 		Credentials: client.OIDCClientCredentials{
@@ -88,6 +91,7 @@ func TestMapAPIClientToModel(t *testing.T) {
 	assert.Equal(t, "client-1", model.ID.ValueString())
 	assert.Equal(t, "API Client", model.Name.ValueString())
 	assert.Equal(t, true, model.RequiresReauthentication.ValueBool())
+	assert.True(t, model.SkipConsent.ValueBool())
 	assert.Equal(t, "https://example.com/launch", model.LaunchURL.ValueString())
 	assert.False(t, model.HasLogo.ValueBool())
 	assert.True(t, model.HasDarkLogo.ValueBool())
