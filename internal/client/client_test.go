@@ -1264,6 +1264,35 @@ func TestClient_DeleteClientLogo(t *testing.T) {
 	}
 }
 
+func TestClient_UpdateClientLogo(t *testing.T) {
+	image := []byte("\x89PNG\r\n\x1a\nnot-really-a-png")
+
+	for _, light := range []bool{true, false} {
+		t.Run(fmt.Sprintf("light=%t", light), func(t *testing.T) {
+			called := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/api/oidc/clients/c1/logo", r.URL.Path)
+				assert.Equal(t, fmt.Sprintf("%t", light), r.URL.Query().Get("light"))
+				assert.Equal(t, "test-token", r.Header.Get("X-API-KEY"))
+
+				filename, data := readUploadedFile(t, r)
+				assert.Equal(t, "logo.png", filename)
+				assert.Equal(t, image, data)
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+
+			c, err := client.NewClient(server.URL, "test-token", false, 30)
+			require.NoError(t, err)
+
+			require.NoError(t, c.UpdateClientLogo("c1", light, "logo.png", image))
+			assert.True(t, called)
+		})
+	}
+}
+
 func TestClient_ListClientSecrets(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method)

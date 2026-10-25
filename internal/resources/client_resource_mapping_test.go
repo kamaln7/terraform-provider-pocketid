@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
 
@@ -285,4 +286,21 @@ func TestLogoFlag(t *testing.T) {
 			assert.Equal(t, types.BoolValue(tt.want), logoFlag(tt.url, tt.priorURL, tt.server))
 		})
 	}
+}
+
+func TestLogoRef(t *testing.T) {
+	file := types.ObjectValueMust(sourceFileAttrTypes, map[string]attr.Value{
+		"source": types.StringValue("logo.svg"),
+		"sha256": types.StringValue("abc"),
+	})
+	noFile := types.ObjectNull(sourceFileAttrTypes)
+	url := types.StringValue("https://example.com/logo.svg")
+
+	assert.True(t, logoRef(types.StringNull(), noFile).IsNull(), "no logo")
+	assert.False(t, logoRef(url, noFile).IsNull(), "a URL")
+	assert.False(t, logoRef(types.StringNull(), file).IsNull(), "a file")
+
+	// A logo managed through a file is reported as set, like one set by URL.
+	assert.True(t, logoFlag(logoRef(types.StringNull(), file), logoRef(types.StringNull(), noFile), false).ValueBool())
+	assert.False(t, logoFlag(logoRef(types.StringNull(), noFile), logoRef(types.StringNull(), file), true).ValueBool())
 }

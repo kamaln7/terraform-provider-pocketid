@@ -189,6 +189,22 @@ resource "pocketid_client" "grafana" {
   dark_logo_url = "https://cdn.jsdelivr.net/gh/selfhst/icons/svg/grafana-light.svg"
 }
 
+# Upload the client's logos from image files
+resource "pocketid_client" "karakeep" {
+  name = "Karakeep"
+
+  callback_urls = [
+    "https://keep.example.com/api/auth/callback/custom"
+  ]
+
+  logo = {
+    source = "${path.module}/logos/karakeep.svg"
+  }
+  dark_logo = {
+    source = "${path.module}/logos/karakeep-dark.svg"
+  }
+}
+
 # Store the client secret securely
 resource "pocketid_client" "api_client" {
   name = "API Service Client"
@@ -219,6 +235,12 @@ output "spa_client_id" {
 - **Not set means not managed.** A logo added in the Pocket ID UI is left untouched while the URL is absent from the configuration.
 - **Removing** a URL that Terraform set deletes that logo.
 - A logo deleted in the UI is set again on the next apply. A changed image at the same URL is not detected; change the URL to refresh it.
+
+`logo` and `dark_logo` upload an image file instead, so Pocket ID does not need to reach it. They behave like the URLs, with these differences:
+
+- Pocket ID picks the image type from the file's extension and accepts files up to 2 MiB.
+- The file's SHA-256 is part of the plan, so editing the file uploads the new image at the next apply.
+- `logo` cannot be combined with `logo_url`, nor `dark_logo` with `dark_logo_url`.
 
 ## Consent
 
@@ -251,10 +273,12 @@ Where the signing keys come from is set per identity:
 - `callback_urls` (List of String) List of allowed callback URLs for the OIDC client. Clients that only use the `client_credentials` grant, such as a service account, have none.
 - `client_id` (String) The client ID of the OIDC client. If not set, Pocket ID generates one. Changing it replaces the client. Must be between 2 and 128 characters and contain only letters, digits, `.`, `_` and `-`.
 - `client_secret` (String, Sensitive) The client secret for non-public clients. Only available during resource creation for non-public clients.When specified, it must have at least a length of 16 and consist only of printable ASCII characters.It is recommended to leave this empty and let Pocket ID automatically generate a secret.
+- `dark_logo` (Attributes) The client's dark-mode logo, uploaded from an image file. When not set, a logo added outside Terraform is left untouched; removing it after Terraform set it deletes the logo. Cannot be combined with dark_logo_url. (see [below for nested schema](#nestedatt--dark_logo))
 - `dark_logo_url` (String) URL of the client's dark-mode logo, downloaded by Pocket ID. When not set, a logo added outside Terraform is left untouched; removing a URL that Terraform set deletes the logo.
 - `federated_identities` (Attributes List) List of federated identities (workload identity federation) allowed to authenticate as this client. (see [below for nested schema](#nestedatt--federated_identities))
 - `is_public` (Boolean) Whether this is a public client (no client secret). Defaults to false.
 - `launch_url` (String) Optional launch URL associated with the client.
+- `logo` (Attributes) The client's logo, uploaded from an image file. When not set, a logo added outside Terraform is left untouched; removing it after Terraform set it deletes the logo. Cannot be combined with logo_url. (see [below for nested schema](#nestedatt--logo))
 - `logo_url` (String) URL of the client's logo, downloaded by Pocket ID. When not set, a logo added outside Terraform is left untouched; removing a URL that Terraform set deletes the logo.
 - `logout_callback_urls` (List of String) List of allowed logout callback URLs for the OIDC client.
 - `pkce_enabled` (Boolean) Whether PKCE is enabled for this client. Defaults to true.
@@ -268,6 +292,18 @@ Where the signing keys come from is set per identity:
 - `has_dark_logo` (Boolean) Whether the client has a dark-mode logo configured.
 - `has_logo` (Boolean) Whether the client has a logo configured.
 - `id` (String) The ID of the OIDC client.
+
+<a id="nestedatt--dark_logo"></a>
+### Nested Schema for `dark_logo`
+
+Required:
+
+- `source` (String) Path to the image file. Pocket ID picks the image type from its extension and accepts up to 2 MiB.
+
+Read-Only:
+
+- `sha256` (String) SHA-256 of the image file, computed at plan time.
+
 
 <a id="nestedatt--federated_identities"></a>
 ### Nested Schema for `federated_identities`
@@ -283,3 +319,15 @@ Optional:
 - `public_keys` (List of String) Public keys, as JWK JSON documents, used to validate the federated identity token. No network fetch is made. Each key must have a `kid` and must not include private key material. Cannot be combined with jwks. Requires Pocket-ID 2.15.0 or later.
 - `replay_protection` (Boolean) Whether Pocket-ID refuses a token whose `jti` it has already seen, so each token can be used once. Tokens without a `jti` are then rejected. Defaults to false.
 - `subject` (String) The expected subject of the federated identity token.
+
+
+<a id="nestedatt--logo"></a>
+### Nested Schema for `logo`
+
+Required:
+
+- `source` (String) Path to the image file. Pocket ID picks the image type from its extension and accepts up to 2 MiB.
+
+Read-Only:
+
+- `sha256` (String) SHA-256 of the image file, computed at plan time.

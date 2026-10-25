@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
@@ -21,6 +22,22 @@ type sourceFileModel struct {
 var sourceFileAttrTypes = map[string]attr.Type{
 	"source": types.StringType,
 	"sha256": types.StringType,
+}
+
+// sourceFileAttributes returns the attributes of a nested object that uploads
+// an image from a local file.
+func sourceFileAttributes(sourceDescription string) map[string]schema.Attribute {
+	return map[string]schema.Attribute{
+		"source": schema.StringAttribute{
+			Description: sourceDescription,
+			Required:    true,
+		},
+		"sha256": schema.StringAttribute{
+			Description:   "SHA-256 of the image file, computed at plan time.",
+			Computed:      true,
+			PlanModifiers: []planmodifier.String{sourceFileSHA256PlanModifier{}},
+		},
+	}
 }
 
 // readSourceFile returns the contents of a file and their hex SHA-256.

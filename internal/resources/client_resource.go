@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-jsontypes/jsontypes"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/objectvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -21,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/Trozz/terraform-provider-pocketid/internal/client"
@@ -96,6 +100,8 @@ type clientResourceModel struct {
 	HasDarkLogo                         types.Bool   `tfsdk:"has_dark_logo"`
 	LogoURL                             types.String `tfsdk:"logo_url"`
 	DarkLogoURL                         types.String `tfsdk:"dark_logo_url"`
+	Logo                                types.Object `tfsdk:"logo"`
+	DarkLogo                            types.Object `tfsdk:"dark_logo"`
 	RequiresReauthentication            types.Bool   `tfsdk:"requires_reauthentication"`
 	SkipConsent                         types.Bool   `tfsdk:"skip_consent"`
 	RequiresPushedAuthorizationRequests types.Bool   `tfsdk:"requires_pushed_authorization_requests"`
@@ -321,6 +327,26 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					"outside Terraform is left untouched; removing a URL that Terraform set deletes the logo.",
 				Optional: true,
 			},
+			"logo": schema.SingleNestedAttribute{
+				Description: "The client's logo, uploaded from an image file. When not set, a logo added outside " +
+					"Terraform is left untouched; removing it after Terraform set it deletes the logo. Cannot be " +
+					"combined with logo_url.",
+				Optional: true,
+				Validators: []validator.Object{
+					objectvalidator.ConflictsWith(path.MatchRoot("logo_url")),
+				},
+				Attributes: sourceFileAttributes("Path to the image file. Pocket ID picks the image type from its extension and accepts up to 2 MiB."),
+			},
+			"dark_logo": schema.SingleNestedAttribute{
+				Description: "The client's dark-mode logo, uploaded from an image file. When not set, a logo added " +
+					"outside Terraform is left untouched; removing it after Terraform set it deletes the logo. " +
+					"Cannot be combined with dark_logo_url.",
+				Optional: true,
+				Validators: []validator.Object{
+					objectvalidator.ConflictsWith(path.MatchRoot("dark_logo_url")),
+				},
+				Attributes: sourceFileAttributes("Path to the image file. Pocket ID picks the image type from its extension and accepts up to 2 MiB."),
+			},
 		},
 	}
 }
@@ -539,9 +565,36 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 			return
 		}
 	}
+
+	// Upload the logo files. Their URL counterparts are handled above.
+	for _, logo := range []struct {
+		name   string
+		light  bool
+		target *types.Object
+	}{
+		{"logo", true, &plan.Logo},
+		{"dark_logo", false, &plan.DarkLogo},
+	} {
+		if logo.target.IsNull() {
+			continue
+		}
+		uploaded, d := r.uploadClientLogo(ctx, clientResp.ID, logo.name, logo.light, *logo.target)
+		resp.Diagnostics.Append(d...)
+		if resp.Diagnostics.HasError() {
+			// Try to clean up the created client
+			_ = r.client.DeleteClient(clientResp.ID)
+			resp.Diagnostics.AddError(
+				"Error creating OIDC client",
+				"The client was deleted because its "+logo.name+" could not be set.",
+			)
+			return
+		}
+		*logo.target = uploaded
+	}
+
 	noURL := types.StringNull()
-	plan.HasLogo = logoFlag(plan.LogoURL, noURL, clientResp.HasLogo)
-	plan.HasDarkLogo = logoFlag(plan.DarkLogoURL, noURL, clientResp.HasDarkLogo)
+	plan.HasLogo = logoFlag(logoRef(plan.LogoURL, plan.Logo), noURL, clientResp.HasLogo)
+	plan.HasDarkLogo = logoFlag(logoRef(plan.DarkLogoURL, plan.DarkLogo), noURL, clientResp.HasDarkLogo)
 
 	// Set the state
 	diags = resp.State.Set(ctx, &plan)
@@ -632,14 +685,16 @@ func (r *clientResource) Read(ctx context.Context, req resource.ReadRequest, res
 		state.AllowedUserGroups = types.SetNull(types.StringType)
 	}
 
-	// Pocket ID does not return logo URLs. A logo managed by Terraform that
-	// is gone from the server (deleted in the UI) drops its URL from state, so
-	// the next plan sets it again.
+	// Pocket ID does not return logo URLs or files. A logo managed by
+	// Terraform that is gone from the server (deleted in the UI) drops its URL
+	// or file from state, so the next plan sets it again.
 	if !clientResp.HasLogo {
 		state.LogoURL = types.StringNull()
+		state.Logo = types.ObjectNull(sourceFileAttrTypes)
 	}
 	if !clientResp.HasDarkLogo {
 		state.DarkLogoURL = types.StringNull()
+		state.DarkLogo = types.ObjectNull(sourceFileAttrTypes)
 	}
 
 	// Note: client_secret is not updated from Read as it's only available during creation
@@ -786,14 +841,36 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	// Delete logos whose URL was removed from the configuration
-	if plan.LogoURL.IsNull() && !state.LogoURL.IsNull() {
+	// Upload logo files that are new or changed. The planned sha256 changes
+	// when the file does, so an edited file is a difference here too.
+	for _, logo := range []struct {
+		name   string
+		light  bool
+		target *types.Object
+		prior  types.Object
+	}{
+		{"logo", true, &plan.Logo, state.Logo},
+		{"dark_logo", false, &plan.DarkLogo, state.DarkLogo},
+	} {
+		if logo.target.IsNull() || logo.target.Equal(logo.prior) {
+			continue
+		}
+		uploaded, d := r.uploadClientLogo(ctx, plan.ID.ValueString(), logo.name, logo.light, *logo.target)
+		resp.Diagnostics.Append(d...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		*logo.target = uploaded
+	}
+
+	// Delete logos whose URL or file was removed from the configuration
+	if logoRef(plan.LogoURL, plan.Logo).IsNull() && !logoRef(state.LogoURL, state.Logo).IsNull() {
 		if err := r.client.DeleteClientLogo(plan.ID.ValueString(), true); err != nil {
 			resp.Diagnostics.AddError("Error deleting client logo", "Could not delete the client logo: "+err.Error())
 			return
 		}
 	}
-	if plan.DarkLogoURL.IsNull() && !state.DarkLogoURL.IsNull() {
+	if logoRef(plan.DarkLogoURL, plan.DarkLogo).IsNull() && !logoRef(state.DarkLogoURL, state.DarkLogo).IsNull() {
 		if err := r.client.DeleteClientLogo(plan.ID.ValueString(), false); err != nil {
 			resp.Diagnostics.AddError("Error deleting client logo", "Could not delete the client dark logo: "+err.Error())
 			return
@@ -801,8 +878,8 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 	}
 
 	// Update state values
-	plan.HasLogo = logoFlag(plan.LogoURL, state.LogoURL, clientResp.HasLogo)
-	plan.HasDarkLogo = logoFlag(plan.DarkLogoURL, state.DarkLogoURL, clientResp.HasDarkLogo)
+	plan.HasLogo = logoFlag(logoRef(plan.LogoURL, plan.Logo), logoRef(state.LogoURL, state.Logo), clientResp.HasLogo)
+	plan.HasDarkLogo = logoFlag(logoRef(plan.DarkLogoURL, plan.DarkLogo), logoRef(state.DarkLogoURL, state.DarkLogo), clientResp.HasDarkLogo)
 	plan.RequiresReauthentication = types.BoolValue(clientResp.RequiresReauthentication)
 	plan.SkipConsent = types.BoolValue(clientResp.SkipConsent)
 	plan.FederatedIdentities = federatedIdentitiesToList(ctx, clientResp.Credentials.FederatedIdentities)
@@ -1204,4 +1281,48 @@ func mapAPIClientToModel(ctx context.Context, api *client.OIDCClient) clientReso
 	}
 
 	return model
+}
+
+// logoRef returns a value that is not null when a logo is managed by
+// Terraform, from either its URL or its file, so that logoFlag treats the two
+// alike.
+func logoRef(url types.String, file types.Object) types.String {
+	if !url.IsNull() {
+		return url
+	}
+	if !file.IsNull() {
+		return types.StringValue("file")
+	}
+	return types.StringNull()
+}
+
+// uploadClientLogo uploads the file a planned logo or dark_logo points at and
+// returns the value to store in state.
+func (r *clientResource) uploadClientLogo(ctx context.Context, clientID, attribute string, light bool, planned types.Object) (types.Object, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	sourcePath := path.Root(attribute).AtName("source")
+
+	var logo sourceFileModel
+	diags.Append(planned.As(ctx, &logo, basetypes.ObjectAsOptions{})...)
+	if diags.HasError() {
+		return planned, diags
+	}
+
+	data, sum, err := readSourceFile(logo.Source.ValueString())
+	if err != nil {
+		diags.AddAttributeError(sourcePath, "Error setting client logo", err.Error())
+		return planned, diags
+	}
+
+	filename := filepath.Base(logo.Source.ValueString())
+	if err := r.client.UpdateClientLogo(clientID, light, filename, data); err != nil {
+		diags.AddAttributeError(sourcePath, "Error setting client logo",
+			fmt.Sprintf("Pocket ID rejected %q: %s", filename, err))
+		return planned, diags
+	}
+
+	logo.SHA256 = types.StringValue(sum)
+	obj, d := types.ObjectValueFrom(ctx, sourceFileAttrTypes, logo)
+	diags.Append(d...)
+	return obj, diags
 }
