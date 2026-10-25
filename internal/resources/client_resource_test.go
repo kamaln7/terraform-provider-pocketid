@@ -28,7 +28,8 @@ func TestClientResource_Schema(t *testing.T) {
 
 	callbackURLsAttr, ok := schemaResponse.Schema.Attributes["callback_urls"]
 	assert.True(t, ok, "callback_urls attribute should exist")
-	assert.True(t, callbackURLsAttr.IsRequired(), "callback_urls should be required")
+	assert.True(t, callbackURLsAttr.IsOptional(), "callback_urls should be optional")
+	assert.False(t, callbackURLsAttr.IsComputed(), "callback_urls should not be computed")
 
 	// Verify computed attributes
 	idAttr, ok := schemaResponse.Schema.Attributes["id"]

@@ -1117,3 +1117,63 @@ func TestAccResourceClient_skipConsentOnCreate(t *testing.T) {
 		},
 	})
 }
+
+func testAccResourceClientConfig_callbacks(name, callbacks string) string {
+	return fmt.Sprintf(`
+resource "pocketid_client" "test" {
+  name = %[1]q
+%[2]s}
+`, name, callbacks)
+}
+
+// TestAccResourceClient_noCallbackURLs checks that a client can be created
+// without callback URLs, as a service account that only uses the
+// client_credentials grant is, and that an empty list is the same thing.
+func TestAccResourceClient_noCallbackURLs(t *testing.T) {
+	resourceName := "pocketid_client.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceClientConfig_callbacks("no-callbacks", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet(resourceName, "id"),
+					resource.TestCheckResourceAttrSet(resourceName, "client_secret"),
+					resource.TestCheckNoResourceAttr(resourceName, "callback_urls.#"),
+				),
+			},
+			{
+				ResourceName:            resourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id"},
+			},
+			// Adding a callback URL is an in-place update.
+			{
+				Config: testAccResourceClientConfig_callbacks("no-callbacks", "  callback_urls = [\"https://example.com/callback\"]\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "callback_urls.#", "1"),
+				),
+			},
+			// Removing it again clears the list on the server.
+			{
+				Config: testAccResourceClientConfig_callbacks("no-callbacks", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr(resourceName, "callback_urls.#"),
+				),
+			},
+			// An explicit empty list is stable: no difference after apply.
+			{
+				Config: testAccResourceClientConfig_callbacks("no-callbacks", "  callback_urls = []\n"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "callback_urls.#", "0"),
+				),
+			},
+		},
+	})
+}

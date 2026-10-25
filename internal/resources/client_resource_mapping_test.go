@@ -158,6 +158,25 @@ func TestMapAPIClientToModelNoFederatedIdentities(t *testing.T) {
 	assert.True(t, model.FederatedIdentities.IsNull())
 }
 
+func TestMapAPIClientToModelNoCallbackURLs(t *testing.T) {
+	ctx := context.Background()
+
+	model := mapAPIClientToModel(ctx, &client.OIDCClient{ID: "client-4", Name: "Service account"})
+
+	assert.True(t, model.CallbackURLs.IsNull())
+}
+
+func TestBuildCreateRequestFromPlanNoCallbackURLs(t *testing.T) {
+	ctx := context.Background()
+
+	req := buildCreateRequestFromPlan(ctx, &clientResourceModel{
+		Name:         types.StringValue("Service account"),
+		CallbackURLs: types.ListNull(types.StringType),
+	})
+
+	assert.Empty(t, req.CallbackURLs)
+}
+
 func TestLogoFlag(t *testing.T) {
 	url := types.StringValue("https://example.com/logo.svg")
 	none := types.StringNull()

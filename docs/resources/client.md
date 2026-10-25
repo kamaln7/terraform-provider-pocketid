@@ -145,6 +145,13 @@ resource "pocketid_client" "internal_app" {
   skip_consent = true
 }
 
+# Create a service account: a confidential client that only uses the
+# client_credentials grant has no callback URLs
+resource "pocketid_client" "service_account" {
+  name      = "Backup Service"
+  client_id = "svc-backup"
+}
+
 # Set the client's logos from image URLs
 resource "pocketid_client" "grafana" {
   name = "Grafana"
@@ -199,12 +206,12 @@ output "spa_client_id" {
 
 ### Required
 
-- `callback_urls` (List of String) List of allowed callback URLs for the OIDC client.
 - `name` (String) The display name of the OIDC client.
 
 ### Optional
 
 - `allowed_user_groups` (Set of String) Set of user group IDs that are allowed to use this client. If empty, all users can use this client.
+- `callback_urls` (List of String) List of allowed callback URLs for the OIDC client. Clients that only use the `client_credentials` grant, such as a service account, have none.
 - `client_id` (String) The client ID to use for the OIDC client. If not set, one will be generated. Must be between 2 and 128 characters.
 - `client_secret` (String, Sensitive) The client secret for non-public clients. Only available during resource creation for non-public clients.When specified, it must have at least a length of 16 and consist only of printable ASCII characters.It is recommended to leave this empty and let Pocket ID automatically generate a secret.
 - `dark_logo_url` (String) URL of the client's dark-mode logo, downloaded by Pocket ID. When not set, a logo added outside Terraform is left untouched; removing a URL that Terraform set deletes the logo.

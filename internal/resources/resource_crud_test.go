@@ -111,7 +111,7 @@ func TestClientResource_SchemaValidation(t *testing.T) {
 
 	callbackURLsAttr, ok := attrs["callback_urls"].(schema.ListAttribute)
 	assert.True(t, ok, "callback_urls should be ListAttribute")
-	assert.True(t, callbackURLsAttr.Required, "callback_urls should be required")
+	assert.True(t, callbackURLsAttr.Optional, "callback_urls should be optional")
 
 	// Computed attributes
 	idAttr, ok := attrs["id"].(schema.StringAttribute)
