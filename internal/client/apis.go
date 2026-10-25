@@ -216,7 +216,7 @@ func unmarshalAPI(body []byte) (*API, error) {
 func clientIDPathSegment(clientID string) string {
 	plain := clientID != ""
 	for _, r := range clientID {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
 			plain = false
 			break
 		}
