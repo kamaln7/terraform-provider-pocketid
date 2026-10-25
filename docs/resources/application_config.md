@@ -41,8 +41,13 @@ resource "pocketid_application_config" "with_smtp" {
   smtp_tls              = "starttls"
   smtp_skip_cert_verify = "false"
 
-  email_login_notification_enabled = "true"
-  email_verification_enabled       = "true"
+  email_login_notification_mode = "browserRecognition"
+  email_verification            = "optional"
+}
+
+# Example: create confidential OIDC clients without a client secret
+resource "pocketid_application_config" "no_auto_secret" {
+  auto_create_oidc_client_secret = "false"
 }
 
 # Example: brand the instance with image files next to the configuration
@@ -70,16 +75,17 @@ resource "pocketid_application_config" "with_branding" {
 - `allow_own_account_edit` (String) Whether users can edit their own account ("true" or "false").
 - `allow_user_signups` (String) User signup mode: "disabled", "withToken", or "open".
 - `app_name` (String) The name of the application.
+- `auto_create_oidc_client_secret` (String) Whether Pocket-ID creates a client secret when a confidential OIDC client is created ("true" or "false"). When it is "false", a new client has no secret until one is created.
 - `background_image` (Attributes) The sign-in page background image. (see [below for nested schema](#nestedatt--background_image))
 - `dark_logo` (Attributes) The application logo in dark mode. (see [below for nested schema](#nestedatt--dark_logo))
 - `default_profile_picture` (Attributes) The profile picture of users without their own. (see [below for nested schema](#nestedatt--default_profile_picture))
 - `disable_animations` (String) Whether to disable UI animations ("true" or "false").
 - `email_api_key_expiration_enabled` (String) Whether API key expiration emails are enabled ("true" or "false").
-- `email_login_notification_enabled` (String) Whether login notification emails are enabled ("true" or "false").
+- `email_login_notification_mode` (String) When a sign-in sends the user a notification email: "disabled" (never), "always" (every sign-in), "ipAndUserAgent" (a sign-in from an IP address and user agent the user has not signed in with before) or "browserRecognition" (a sign-in from a browser Pocket-ID does not recognize by its cookie, and that is new by IP address and user agent).
 - `email_logo` (Attributes) The logo used in emails. (see [below for nested schema](#nestedatt--email_logo))
 - `email_one_time_access_as_admin_enabled` (String) Whether admins can use one-time access email links ("true" or "false").
 - `email_one_time_access_as_unauthenticated_enabled` (String) Whether unauthenticated users can request one-time access email links ("true" or "false").
-- `email_verification_enabled` (String) Whether email verification is enabled ("true" or "false").
+- `email_verification` (String) Email verification mode: "disabled", "optional" or "required". "required" needs require_user_email "true", emails_verified "false" and an SMTP host and sender address.
 - `emails_verified` (String) Whether user emails are considered verified ("true" or "false").
 - `favicon` (Attributes) The favicon. (see [below for nested schema](#nestedatt--favicon))
 - `home_page_url` (String) URL of the application home page.

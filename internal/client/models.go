@@ -226,9 +226,9 @@ type ApplicationConfig struct {
 
 	EmailOneTimeAccessAsAdminEnabled           string `json:"emailOneTimeAccessAsAdminEnabled"`
 	EmailOneTimeAccessAsUnauthenticatedEnabled string `json:"emailOneTimeAccessAsUnauthenticatedEnabled"`
-	EmailLoginNotificationEnabled              string `json:"emailLoginNotificationEnabled"`
+	EmailLoginNotificationMode                 string `json:"emailLoginNotificationMode"`
 	EmailApiKeyExpirationEnabled               string `json:"emailApiKeyExpirationEnabled"`
-	EmailVerificationEnabled                   string `json:"emailVerificationEnabled"`
+	EmailVerification                          string `json:"emailVerification"`
 
 	// LDAP
 	LdapEnabled                        string `json:"ldapEnabled"`

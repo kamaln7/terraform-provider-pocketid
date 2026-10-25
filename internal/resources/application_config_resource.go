@@ -68,9 +68,9 @@ type applicationConfigModel struct {
 
 	EmailOneTimeAccessAsAdminEnabled           types.String `tfsdk:"email_one_time_access_as_admin_enabled"`
 	EmailOneTimeAccessAsUnauthenticatedEnabled types.String `tfsdk:"email_one_time_access_as_unauthenticated_enabled"`
-	EmailLoginNotificationEnabled              types.String `tfsdk:"email_login_notification_enabled"`
+	EmailLoginNotificationMode                 types.String `tfsdk:"email_login_notification_mode"`
 	EmailApiKeyExpirationEnabled               types.String `tfsdk:"email_api_key_expiration_enabled"`
-	EmailVerificationEnabled                   types.String `tfsdk:"email_verification_enabled"`
+	EmailVerification                          types.String `tfsdk:"email_verification"`
 
 	// LDAP
 	LdapEnabled                        types.String `tfsdk:"ldap_enabled"`
@@ -93,6 +93,9 @@ type applicationConfigModel struct {
 	LdapAttributeGroupName             types.String `tfsdk:"ldap_attribute_group_name"`
 	LdapAdminGroupName                 types.String `tfsdk:"ldap_admin_group_name"`
 	LdapSoftDeleteUsers                types.String `tfsdk:"ldap_soft_delete_users"`
+
+	// OIDC
+	AutoCreateOIDCClientSecret types.String `tfsdk:"auto_create_oidc_client_secret"`
 
 	// Images
 	Logo                  types.Object `tfsdk:"logo"`
@@ -130,9 +133,9 @@ func applicationConfigToModel(cfg *client.ApplicationConfig, m *applicationConfi
 
 	m.EmailOneTimeAccessAsAdminEnabled = types.StringValue(cfg.EmailOneTimeAccessAsAdminEnabled)
 	m.EmailOneTimeAccessAsUnauthenticatedEnabled = types.StringValue(cfg.EmailOneTimeAccessAsUnauthenticatedEnabled)
-	m.EmailLoginNotificationEnabled = types.StringValue(cfg.EmailLoginNotificationEnabled)
+	m.EmailLoginNotificationMode = types.StringValue(cfg.EmailLoginNotificationMode)
 	m.EmailApiKeyExpirationEnabled = types.StringValue(cfg.EmailApiKeyExpirationEnabled)
-	m.EmailVerificationEnabled = types.StringValue(cfg.EmailVerificationEnabled)
+	m.EmailVerification = types.StringValue(cfg.EmailVerification)
 
 	m.LdapEnabled = types.StringValue(cfg.LdapEnabled)
 	m.LdapUrl = types.StringValue(cfg.LdapUrl)
@@ -154,6 +157,9 @@ func applicationConfigToModel(cfg *client.ApplicationConfig, m *applicationConfi
 	m.LdapAttributeGroupName = types.StringValue(cfg.LdapAttributeGroupName)
 	m.LdapAdminGroupName = types.StringValue(cfg.LdapAdminGroupName)
 	m.LdapSoftDeleteUsers = types.StringValue(cfg.LdapSoftDeleteUsers)
+
+	// OIDC
+	m.AutoCreateOIDCClientSecret = types.StringValue(cfg.AutoCreateOIDCClientSecret)
 }
 
 // mergedString returns the planned value if it is set (known and non-null),
@@ -199,9 +205,9 @@ func modelToApplicationConfig(plan *applicationConfigModel, current *client.Appl
 
 	cfg.EmailOneTimeAccessAsAdminEnabled = mergedString(plan.EmailOneTimeAccessAsAdminEnabled, current.EmailOneTimeAccessAsAdminEnabled)
 	cfg.EmailOneTimeAccessAsUnauthenticatedEnabled = mergedString(plan.EmailOneTimeAccessAsUnauthenticatedEnabled, current.EmailOneTimeAccessAsUnauthenticatedEnabled)
-	cfg.EmailLoginNotificationEnabled = mergedString(plan.EmailLoginNotificationEnabled, current.EmailLoginNotificationEnabled)
+	cfg.EmailLoginNotificationMode = mergedString(plan.EmailLoginNotificationMode, current.EmailLoginNotificationMode)
 	cfg.EmailApiKeyExpirationEnabled = mergedString(plan.EmailApiKeyExpirationEnabled, current.EmailApiKeyExpirationEnabled)
-	cfg.EmailVerificationEnabled = mergedString(plan.EmailVerificationEnabled, current.EmailVerificationEnabled)
+	cfg.EmailVerification = mergedString(plan.EmailVerification, current.EmailVerification)
 
 	cfg.LdapEnabled = mergedString(plan.LdapEnabled, current.LdapEnabled)
 	cfg.LdapUrl = mergedString(plan.LdapUrl, current.LdapUrl)
@@ -223,6 +229,8 @@ func modelToApplicationConfig(plan *applicationConfigModel, current *client.Appl
 	cfg.LdapAttributeGroupName = mergedString(plan.LdapAttributeGroupName, current.LdapAttributeGroupName)
 	cfg.LdapAdminGroupName = mergedString(plan.LdapAdminGroupName, current.LdapAdminGroupName)
 	cfg.LdapSoftDeleteUsers = mergedString(plan.LdapSoftDeleteUsers, current.LdapSoftDeleteUsers)
+
+	cfg.AutoCreateOIDCClientSecret = mergedString(plan.AutoCreateOIDCClientSecret, current.AutoCreateOIDCClientSecret)
 
 	return &cfg
 }
@@ -295,9 +303,9 @@ func (r *applicationConfigResource) Schema(_ context.Context, _ resource.SchemaR
 
 			"email_one_time_access_as_admin_enabled":           optionalComputedString("Whether admins can use one-time access email links (\"true\" or \"false\").", false),
 			"email_one_time_access_as_unauthenticated_enabled": optionalComputedString("Whether unauthenticated users can request one-time access email links (\"true\" or \"false\").", false),
-			"email_login_notification_enabled":                 optionalComputedString("Whether login notification emails are enabled (\"true\" or \"false\").", false),
+			"email_login_notification_mode":                    optionalComputedString("When a sign-in sends the user a notification email: \"disabled\" (never), \"always\" (every sign-in), \"ipAndUserAgent\" (a sign-in from an IP address and user agent the user has not signed in with before) or \"browserRecognition\" (a sign-in from a browser Pocket-ID does not recognize by its cookie, and that is new by IP address and user agent).", false),
 			"email_api_key_expiration_enabled":                 optionalComputedString("Whether API key expiration emails are enabled (\"true\" or \"false\").", false),
-			"email_verification_enabled":                       optionalComputedString("Whether email verification is enabled (\"true\" or \"false\").", false),
+			"email_verification":                               optionalComputedString("Email verification mode: \"disabled\", \"optional\" or \"required\". \"required\" needs require_user_email \"true\", emails_verified \"false\" and an SMTP host and sender address.", false),
 
 			"ldap_enabled":                           optionalComputedString("Whether LDAP integration is enabled (\"true\" or \"false\").", false),
 			"ldap_url":                               optionalComputedString("LDAP server URL.", false),
@@ -319,6 +327,8 @@ func (r *applicationConfigResource) Schema(_ context.Context, _ resource.SchemaR
 			"ldap_attribute_group_name":              optionalComputedString("LDAP attribute for the group name.", false),
 			"ldap_admin_group_name":                  optionalComputedString("LDAP group name granting admin privileges.", false),
 			"ldap_soft_delete_users":                 optionalComputedString("Whether to soft-delete users removed from LDAP (\"true\" or \"false\").", false),
+
+			"auto_create_oidc_client_secret": optionalComputedString("Whether Pocket-ID creates a client secret when a confidential OIDC client is created (\"true\" or \"false\"). When it is \"false\", a new client has no secret until one is created.", false),
 
 			"logo":                    applicationImageAttribute("The application logo."),
 			"dark_logo":               applicationImageAttribute("The application logo in dark mode."),

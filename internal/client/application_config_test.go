@@ -90,6 +90,49 @@ func TestUpdateApplicationConfig(t *testing.T) {
 	assert.Equal(t, "smtp.example.com", updated.SmtpHost)
 }
 
+// Pocket ID 2.19 renamed emailLoginNotificationEnabled to
+// emailLoginNotificationMode and emailVerificationEnabled to emailVerification,
+// and requires both in the update.
+func TestApplicationConfig_Pocket219EmailSettings(t *testing.T) {
+	var receivedBody map[string]string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut {
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &receivedBody))
+		}
+		_ = json.NewEncoder(w).Encode([]client.AppConfigVariable{
+			{Key: "emailLoginNotificationMode", Type: "string", Value: "ipAndUserAgent"},
+			{Key: "emailVerification", Type: "string", Value: "optional"},
+			{Key: "autoCreateOidcClientSecret", Type: "boolean", Value: "false"},
+		})
+	}))
+	defer server.Close()
+
+	c, err := client.NewClient(server.URL, "test-token", false, 30)
+	require.NoError(t, err)
+
+	cfg, err := c.GetApplicationConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "ipAndUserAgent", cfg.EmailLoginNotificationMode)
+	assert.Equal(t, "optional", cfg.EmailVerification)
+	assert.Equal(t, "false", cfg.AutoCreateOIDCClientSecret)
+
+	_, err = c.UpdateApplicationConfig(&client.ApplicationConfig{
+		EmailLoginNotificationMode: "always",
+		EmailVerification:          "required",
+		AutoCreateOIDCClientSecret: "true",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "always", receivedBody["emailLoginNotificationMode"])
+	assert.Equal(t, "required", receivedBody["emailVerification"])
+	assert.Equal(t, "true", receivedBody["autoCreateOidcClientSecret"])
+	assert.NotContains(t, receivedBody, "emailLoginNotificationEnabled")
+	assert.NotContains(t, receivedBody, "emailVerificationEnabled")
+}
+
 func TestClient_UpdateApplicationImage(t *testing.T) {
 	image := []byte("\x89PNG\r\n\x1a\nnot-really-a-png")
 

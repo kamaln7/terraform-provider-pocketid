@@ -58,6 +58,16 @@ func TestApplicationConfigDataSource_Schema(t *testing.T) {
 		require.True(t, ok, "attribute %s should exist", name)
 		assert.True(t, attr.Sensitive, "attribute %s should be sensitive", name)
 	}
+
+	// The settings Pocket-ID 2.19 renamed or added, and not the old names.
+	for _, name := range []string{"email_login_notification_mode", "email_verification", "auto_create_oidc_client_secret"} {
+		attr, ok := resp.Schema.Attributes[name].(schema.StringAttribute)
+		require.True(t, ok, "attribute %s should exist", name)
+		assert.True(t, attr.Computed, "attribute %s should be computed", name)
+	}
+	for _, name := range []string{"email_login_notification_enabled", "email_verification_enabled"} {
+		assert.NotContains(t, resp.Schema.Attributes, name)
+	}
 }
 
 func TestApplicationConfigDataSource_Configure(t *testing.T) {
