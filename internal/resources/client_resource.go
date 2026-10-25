@@ -180,8 +180,9 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				},
 			},
 			"callback_urls": schema.ListAttribute{
-				Description: "List of allowed callback URLs for the OIDC client.",
-				Required:    true,
+				Description: "List of allowed callback URLs for the OIDC client. Clients that only use the " +
+					"`client_credentials` grant, such as a service account, have none.",
+				Optional:    true,
 				ElementType: types.StringType,
 				Validators: []validator.List{
 					listvalidator.ValueStringsAre(urlValidator{}),
@@ -350,8 +351,10 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	// Convert from Terraform types to Go types
 	var callbackURLs []string
-	diags = plan.CallbackURLs.ElementsAs(ctx, &callbackURLs, false)
-	resp.Diagnostics.Append(diags...)
+	if !plan.CallbackURLs.IsNull() {
+		diags = plan.CallbackURLs.ElementsAs(ctx, &callbackURLs, false)
+		resp.Diagnostics.Append(diags...)
+	}
 
 	var logoutCallbackURLs []string
 	if !plan.LogoutCallbackURLs.IsNull() {
@@ -531,10 +534,18 @@ func (r *clientResource) Read(ctx context.Context, req resource.ReadRequest, res
 		state.LaunchURL = types.StringNull()
 	}
 
-	// Update callback URLs
-	callbackURLs, diags := types.ListValueFrom(ctx, types.StringType, clientResp.CallbackURLs)
-	resp.Diagnostics.Append(diags...)
-	state.CallbackURLs = callbackURLs
+	// Update callback URLs. An empty list in state stays empty, so that
+	// `callback_urls = []` does not become a difference.
+	switch {
+	case len(clientResp.CallbackURLs) > 0:
+		callbackURLs, diags := types.ListValueFrom(ctx, types.StringType, clientResp.CallbackURLs)
+		resp.Diagnostics.Append(diags...)
+		state.CallbackURLs = callbackURLs
+	case !state.CallbackURLs.IsNull() && len(state.CallbackURLs.Elements()) == 0:
+		state.CallbackURLs = types.ListValueMust(types.StringType, []attr.Value{})
+	default:
+		state.CallbackURLs = types.ListNull(types.StringType)
+	}
 
 	// Update logout callback URLs
 	if len(clientResp.LogoutCallbackURLs) > 0 {
@@ -622,8 +633,10 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	// Convert from Terraform types to Go types
 	var callbackURLs []string
-	diags = plan.CallbackURLs.ElementsAs(ctx, &callbackURLs, false)
-	resp.Diagnostics.Append(diags...)
+	if !plan.CallbackURLs.IsNull() {
+		diags = plan.CallbackURLs.ElementsAs(ctx, &callbackURLs, false)
+		resp.Diagnostics.Append(diags...)
+	}
 
 	var logoutCallbackURLs []string
 	if !plan.LogoutCallbackURLs.IsNull() {
@@ -926,7 +939,9 @@ func (v urlValidator) ValidateString(ctx context.Context, req validator.StringRe
 // buildCreateRequestFromPlan converts the Terraform plan model into an API create request.
 func buildCreateRequestFromPlan(ctx context.Context, plan *clientResourceModel) *client.OIDCClientCreateRequest {
 	var callbackURLs []string
-	_ = plan.CallbackURLs.ElementsAs(ctx, &callbackURLs, false)
+	if !plan.CallbackURLs.IsNull() {
+		_ = plan.CallbackURLs.ElementsAs(ctx, &callbackURLs, false)
+	}
 
 	var logoutCallbackURLs []string
 	if !plan.LogoutCallbackURLs.IsNull() {
@@ -1028,8 +1043,12 @@ func mapAPIClientToModel(ctx context.Context, api *client.OIDCClient) clientReso
 	model.RequiresReauthentication = types.BoolValue(api.RequiresReauthentication)
 	model.FederatedIdentities = federatedIdentitiesToList(ctx, api.Credentials.FederatedIdentities)
 
-	callbackURLs, _ := types.ListValueFrom(ctx, types.StringType, api.CallbackURLs)
-	model.CallbackURLs = callbackURLs
+	if len(api.CallbackURLs) > 0 {
+		callbackURLs, _ := types.ListValueFrom(ctx, types.StringType, api.CallbackURLs)
+		model.CallbackURLs = callbackURLs
+	} else {
+		model.CallbackURLs = types.ListNull(types.StringType)
+	}
 
 	if len(api.LogoutCallbackURLs) > 0 {
 		logoutURLs, _ := types.ListValueFrom(ctx, types.StringType, api.LogoutCallbackURLs)

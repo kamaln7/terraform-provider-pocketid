@@ -131,6 +131,13 @@ resource "pocketid_client" "federated_app" {
   ]
 }
 
+# Create a service account: a confidential client that only uses the
+# client_credentials grant has no callback URLs
+resource "pocketid_client" "service_account" {
+  name      = "Backup Service"
+  client_id = "svc-backup"
+}
+
 # Set the client's logos from image URLs
 resource "pocketid_client" "grafana" {
   name = "Grafana"
