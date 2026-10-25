@@ -1,5 +1,7 @@
 package client
 
+import "encoding/json"
+
 // ErrorResponse represents an error response from the Pocket-ID API
 type ErrorResponse struct {
 	Error   string `json:"error"`
@@ -70,7 +72,15 @@ type OIDCClientFederatedIdentity struct {
 	Issuer   string `json:"issuer"`
 	Subject  string `json:"subject,omitempty"`
 	Audience string `json:"audience,omitempty"`
-	JWKS     string `json:"jwks,omitempty"`
+	// JWKS is the URL of a JWKS. It is mutually exclusive with PublicKeys.
+	JWKS string `json:"jwks,omitempty"`
+	// PublicKeys are the JWKs that may sign an assertion, which Pocket-ID
+	// returns re-encoded with sorted keys (Pocket-ID >= 2.15.0). They are
+	// mutually exclusive with JWKS.
+	PublicKeys []json.RawMessage `json:"publicKeys,omitempty"`
+	// ReplayProtection makes Pocket-ID refuse an assertion whose jti it has
+	// already seen.
+	ReplayProtection bool `json:"replayProtection"`
 }
 
 // OIDCClientCreateRequest represents a request to create or update an OIDC client
