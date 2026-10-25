@@ -992,3 +992,128 @@ func TestAccResourceClient_logoURLRejected(t *testing.T) {
 		},
 	})
 }
+
+// testAccResourceClientConfig_skipConsent renders a client with skip_consent
+// set to the given value; a nil value leaves the attribute out.
+func testAccResourceClientConfig_skipConsent(name string, skipConsent *bool) string {
+	var attr string
+	if skipConsent != nil {
+		attr = fmt.Sprintf("  skip_consent  = %t\n", *skipConsent)
+	}
+	return fmt.Sprintf(`
+resource "pocketid_client" "test" {
+  name          = %[1]q
+  callback_urls = ["https://example.com/callback"]
+%[2]s}
+`, name, attr)
+}
+
+// checkClientSkipConsent asserts the skipConsent value Pocket ID reports.
+func checkClientSkipConsent(id string, want bool) error {
+	c, err := testClient()
+	if err != nil {
+		return err
+	}
+
+	got, err := c.GetClient(id)
+	if err != nil {
+		return err
+	}
+	if got.SkipConsent != want {
+		return fmt.Errorf("skipConsent is %t, want %t", got.SkipConsent, want)
+	}
+	return nil
+}
+
+// TestAccResourceClient_skipConsent checks the skip_consent lifecycle: it is
+// applied on create, changed in place, imported, and left alone when it is not
+// configured.
+func TestAccResourceClient_skipConsent(t *testing.T) {
+	resourceName := "pocketid_client.test"
+	yes, no := true, false
+
+	var clientID string
+	captureID := resource.TestCheckResourceAttrWith(resourceName, "id", func(v string) error {
+		clientID = v
+		return nil
+	})
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Not set on create: the client requires consent.
+			{
+				Config: testAccResourceClientConfig_skipConsent("skip-consent", nil),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "skip_consent", "false"),
+					captureID,
+				),
+			},
+			// Set to true: applied in place.
+			{
+				Config: testAccResourceClientConfig_skipConsent("skip-consent", &yes),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "skip_consent", "true"),
+					func(*terraform.State) error { return checkClientSkipConsent(clientID, true) },
+				),
+			},
+			// Imported with the value Pocket ID holds.
+			{
+				ResourceName:            resourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id"},
+			},
+			// Removed from the configuration: not managed, so the value stays.
+			{
+				Config: testAccResourceClientConfig_skipConsent("skip-consent", nil),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectEmptyPlan(),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "skip_consent", "true"),
+					func(*terraform.State) error { return checkClientSkipConsent(clientID, true) },
+				),
+			},
+			// Set back to false explicitly.
+			{
+				Config: testAccResourceClientConfig_skipConsent("skip-consent", &no),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "skip_consent", "false"),
+					func(*terraform.State) error { return checkClientSkipConsent(clientID, false) },
+				),
+			},
+		},
+	})
+}
+
+// TestAccResourceClient_skipConsentOnCreate checks that skip_consent set on
+// create reaches Pocket ID.
+func TestAccResourceClient_skipConsentOnCreate(t *testing.T) {
+	resourceName := "pocketid_client.test"
+	yes := true
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceClientConfig_skipConsent("skip-consent-create", &yes),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "skip_consent", "true"),
+					resource.TestCheckResourceAttrWith(resourceName, "id", func(v string) error {
+						return checkClientSkipConsent(v, true)
+					}),
+				),
+			},
+		},
+	})
+}

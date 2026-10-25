@@ -131,6 +131,17 @@ resource "pocketid_client" "federated_app" {
   ]
 }
 
+# Create a client for your own app that skips the consent screen
+resource "pocketid_client" "internal_app" {
+  name = "Internal App"
+
+  callback_urls = [
+    "https://internal.example.com/callback"
+  ]
+
+  skip_consent = true
+}
+
 # Set the client's logos from image URLs
 resource "pocketid_client" "grafana" {
   name = "Grafana"
@@ -173,5 +184,11 @@ output "spa_client_id" {
 - **Not set means not managed.** A logo added in the Pocket ID UI is left untouched while the URL is absent from the configuration.
 - **Removing** a URL that Terraform set deletes that logo.
 - A logo deleted in the UI is set again on the next apply. A changed image at the same URL is not detected; change the URL to refresh it.
+
+## Consent
+
+`skip_consent` hides the consent screen shown when a user signs in to the client for the first time. Pocket ID still records the authorization, so users can see and revoke it later.
+
+**Not set means not managed.** A value changed in the Pocket ID UI is kept and read back into state; set it explicitly to have Terraform enforce it. A new client without it requires consent.
 
 {{ .SchemaMarkdown | trimspace }}
