@@ -339,3 +339,74 @@ func TestAccResourceApplicationConfig_imageDeletedOutOfBand(t *testing.T) {
 		},
 	})
 }
+
+// Pocket ID 2.19 replaced emailLoginNotificationEnabled and
+// emailVerificationEnabled with the modes emailLoginNotificationMode and
+// emailVerification, and added autoCreateOidcClientSecret. The update endpoint
+// requires the first two.
+func TestAccResourceApplicationConfig_email219Settings(t *testing.T) {
+	resourceName := "pocketid_application_config.test"
+	dataSourceName := "data.pocketid_application_config.test"
+	config := func(mode, verification, autoSecret string) string {
+		return fmt.Sprintf(`
+resource "pocketid_application_config" "test" {
+  email_login_notification_mode  = %[1]q
+  email_verification             = %[2]q
+  auto_create_oidc_client_secret = %[3]q
+}
+
+data "pocketid_application_config" "test" {
+  depends_on = [pocketid_application_config.test]
+}
+`, mode, verification, autoSecret)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config("always", "optional", "false"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "email_login_notification_mode", "always"),
+					resource.TestCheckResourceAttr(resourceName, "email_verification", "optional"),
+					resource.TestCheckResourceAttr(resourceName, "auto_create_oidc_client_secret", "false"),
+					resource.TestCheckResourceAttr(dataSourceName, "email_login_notification_mode", "always"),
+					resource.TestCheckResourceAttr(dataSourceName, "email_verification", "optional"),
+					resource.TestCheckResourceAttr(dataSourceName, "auto_create_oidc_client_secret", "false"),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
+				Config: config("browserRecognition", "disabled", "false"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "email_login_notification_mode", "browserRecognition"),
+					resource.TestCheckResourceAttr(resourceName, "email_verification", "disabled"),
+				),
+			},
+			// Pocket ID refuses required verification without an SMTP host.
+			{
+				Config:      config("browserRecognition", "required", "false"),
+				ExpectError: regexp.MustCompile(`(?i)email_?verification`),
+			},
+			// An unknown mode is refused by Pocket ID too.
+			{
+				Config:      config("sometimes", "disabled", "false"),
+				ExpectError: regexp.MustCompile(`(?i)email_?login_?notification_?mode`),
+			},
+			// Back to Pocket ID's defaults, which the other tests rely on.
+			{
+				Config: config("disabled", "disabled", "true"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "email_login_notification_mode", "disabled"),
+					resource.TestCheckResourceAttr(resourceName, "email_verification", "disabled"),
+					resource.TestCheckResourceAttr(resourceName, "auto_create_oidc_client_secret", "true"),
+				),
+			},
+		},
+	})
+}

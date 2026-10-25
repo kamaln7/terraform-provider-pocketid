@@ -35,12 +35,13 @@ output "ldap_enabled" {
 - `allow_own_account_edit` (String) Whether users can edit their own account.
 - `allow_user_signups` (String) User signup mode.
 - `app_name` (String) The name of the application.
+- `auto_create_oidc_client_secret` (String) Whether Pocket-ID creates a client secret when a confidential OIDC client is created.
 - `disable_animations` (String) Whether UI animations are disabled.
 - `email_api_key_expiration_enabled` (String) Whether API key expiration emails are enabled.
-- `email_login_notification_enabled` (String) Whether login notification emails are enabled.
+- `email_login_notification_mode` (String) When a sign-in sends the user a notification email: "disabled", "always", "ipAndUserAgent" or "browserRecognition".
 - `email_one_time_access_as_admin_enabled` (String) Whether admins can use one-time access email links.
 - `email_one_time_access_as_unauthenticated_enabled` (String) Whether unauthenticated users can request one-time access email links.
-- `email_verification_enabled` (String) Whether email verification is enabled.
+- `email_verification` (String) Email verification mode: "disabled", "optional" or "required".
 - `emails_verified` (String) Whether user emails are considered verified.
 - `home_page_url` (String) URL of the application home page.
 - `id` (String) Fixed identifier of the application configuration singleton.

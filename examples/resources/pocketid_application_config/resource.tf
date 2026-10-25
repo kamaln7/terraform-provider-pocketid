@@ -26,8 +26,13 @@ resource "pocketid_application_config" "with_smtp" {
   smtp_tls              = "starttls"
   smtp_skip_cert_verify = "false"
 
-  email_login_notification_enabled = "true"
-  email_verification_enabled       = "true"
+  email_login_notification_mode = "browserRecognition"
+  email_verification            = "optional"
+}
+
+# Example: create confidential OIDC clients without a client secret
+resource "pocketid_application_config" "no_auto_secret" {
+  auto_create_oidc_client_secret = "false"
 }
 
 # Example: brand the instance with image files next to the configuration
