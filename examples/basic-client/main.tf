@@ -22,6 +22,11 @@ resource "pocketid_client" "example" {
   # allowed_user_groups = ["developers", "admins"]
 }
 
+# Create a client secret. Pocket ID generates the value and returns it once.
+resource "pocketid_client_secret" "example" {
+  client_id = pocketid_client.example.id
+}
+
 # Data source to verify the client was created
 data "pocketid_client" "example" {
   client_id = pocketid_client.example.id

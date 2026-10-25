@@ -247,6 +247,7 @@ func TestResources_Interfaces(t *testing.T) {
 		factory func() resource.Resource
 	}{
 		{"ClientResource", resources.NewClientResource},
+		{"ClientSecretResource", resources.NewClientSecretResource},
 		{"UserResource", resources.NewUserResource},
 		{"GroupResource", resources.NewGroupResource},
 	}

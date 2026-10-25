@@ -4,14 +4,17 @@ page_title: "pocketid_client Resource - terraform-provider-pocketid"
 subcategory: ""
 description: |-
   Manages an OIDC client in Pocket-ID. OIDC clients are applications that can authenticate users through Pocket-ID.
-  ~> Note The client secret is only available during resource creation and cannot be retrieved later. Store it securely.
+  This resource does not manage the client's secrets. Use the pocketid_client_secret resource to create them.
+  ~> Note When Pocket ID's autoCreateOidcClientSecret setting is on, which is its default, Pocket ID creates a secret for every new confidential client. No resource tracks that secret and Terraform leaves it alone. Set AUTO_CREATE_OIDC_CLIENT_SECRET=false on the Pocket ID server (Pocket ID reads it only when UI_CONFIG_DISABLED=true; otherwise turn the setting off in the application settings) so that the secrets of a client are exactly the pocketid_client_secret resources that you configure.
 ---
 
 # pocketid_client (Resource)
 
 Manages an OIDC client in Pocket-ID. OIDC clients are applications that can authenticate users through Pocket-ID.
 
-~> **Note** The client secret is only available during resource creation and cannot be retrieved later. Store it securely.
+This resource does not manage the client's secrets. Use the `pocketid_client_secret` resource to create them.
+
+~> **Note** When Pocket ID's `autoCreateOidcClientSecret` setting is on, which is its default, Pocket ID creates a secret for every new confidential client. No resource tracks that secret and Terraform leaves it alone. Set `AUTO_CREATE_OIDC_CLIENT_SECRET=false` on the Pocket ID server (Pocket ID reads it only when `UI_CONFIG_DISABLED=true`; otherwise turn the setting off in the application settings) so that the secrets of a client are exactly the `pocketid_client_secret` resources that you configure.
 
 ## Example Usage
 
@@ -146,28 +149,17 @@ resource "pocketid_client" "grafana" {
   dark_logo_url = "https://cdn.jsdelivr.net/gh/selfhst/icons/svg/grafana-light.svg"
 }
 
-# Store the client secret securely
-resource "pocketid_client" "api_client" {
-  name = "API Service Client"
-
-  callback_urls = [
-    "https://api.example.com/oauth/callback"
-  ]
-
-  is_public = false
-}
-
-# Output the client secret (be careful with this in production!)
-output "api_client_secret" {
-  value     = pocketid_client.api_client.client_secret
-  sensitive = true
-}
-
 # Use the client ID in other resources
 output "spa_client_id" {
   value = pocketid_client.spa_app.id
 }
 ```
+
+## Client secrets
+
+This resource does not manage the secrets of a client. Create them with the [`pocketid_client_secret`](client_secret.md) resource.
+
+Pocket ID creates a secret for every new confidential client when its `autoCreateOidcClientSecret` setting is on, which is the default. No resource tracks that secret, and Terraform neither reads, rotates nor deletes it. To avoid it, turn the setting off: set `AUTO_CREATE_OIDC_CLIENT_SECRET=false` on the Pocket ID server, which Pocket ID reads only when `UI_CONFIG_DISABLED=true`, or turn it off in the application settings otherwise. Then the secrets of a client are exactly the `pocketid_client_secret` resources that you configure.
 
 ## Logos
 
@@ -189,7 +181,6 @@ output "spa_client_id" {
 
 - `allowed_user_groups` (Set of String) Set of user group IDs that are allowed to use this client. If empty, all users can use this client.
 - `client_id` (String) The client ID to use for the OIDC client. If not set, one will be generated. Must be between 2 and 128 characters.
-- `client_secret` (String, Sensitive) The client secret for non-public clients. Only available during resource creation for non-public clients.When specified, it must have at least a length of 16 and consist only of printable ASCII characters.It is recommended to leave this empty and let Pocket ID automatically generate a secret.
 - `dark_logo_url` (String) URL of the client's dark-mode logo, downloaded by Pocket ID. When not set, a logo added outside Terraform is left untouched; removing a URL that Terraform set deletes the logo.
 - `federated_identities` (Attributes List) List of federated identities (workload identity federation) allowed to authenticate as this client. (see [below for nested schema](#nestedatt--federated_identities))
 - `is_public` (Boolean) Whether this is a public client (no client secret). Defaults to false.
@@ -202,7 +193,6 @@ output "spa_client_id" {
 
 ### Read-Only
 
-- `client_secret_id` (String) Identifier of the client secret currently tracked by Terraform, used to revoke the previous secret when client_secret is rotated. Empty on Pocket ID versions before 2.14.0, which keep only one secret per client. Resources created before this attribute existed do not revoke their previous secret on the first rotation; revoke it in the Pocket ID UI.
 - `has_dark_logo` (Boolean) Whether the client has a dark-mode logo configured.
 - `has_logo` (Boolean) Whether the client has a logo configured.
 - `id` (String) The ID of the OIDC client.

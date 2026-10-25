@@ -1,7 +1,9 @@
 package client_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -121,23 +123,6 @@ func TestClient_CreateClient(t *testing.T) {
 	result, err := c.CreateClient(createReq)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedClient, result)
-}
-
-func TestClient_CreateClient_CreatedSecret(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"id":"test-client-id","name":"Test Client","createdSecret":{"id":"secret-id","prefix":"abcd","secret":"generated"}}`)
-	}))
-	defer server.Close()
-
-	c, err := client.NewClient(server.URL, "test-token", false, 30)
-	require.NoError(t, err)
-
-	result, err := c.CreateClient(&client.OIDCClientCreateRequest{Name: "Test Client"})
-	require.NoError(t, err)
-	require.NotNil(t, result.CreatedSecret)
-	assert.Equal(t, "secret-id", result.CreatedSecret.ID)
-	assert.Equal(t, "generated", result.CreatedSecret.Secret)
 }
 
 func TestClient_GetClient(t *testing.T) {
@@ -273,78 +258,6 @@ func TestClient_ListClients(t *testing.T) {
 	result, err := c.ListClients()
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResponse, result)
-}
-
-func TestClient_GenerateClientSecret(t *testing.T) {
-	expectedSecret := "new-client-secret-123"
-
-	tests := []struct {
-		name             string
-		currentVersion   string
-		versionStatus    int
-		customSecret     string
-		expectedEndpoint string
-	}{
-		{"1.0", "1.0", http.StatusOK, "", "/secret"},
-		{"2.2.0", "2.2.0", http.StatusOK, "", "/secret"},
-		{"2.13", "2.13", http.StatusOK, "", "/secret"},
-		{"2.13.9", "2.13.9", http.StatusOK, "", "/secret"},
-		{"2.14.0", "2.14.0", http.StatusOK, "", "/secrets"},
-		{"2.14.1", "2.14.1", http.StatusOK, "", "/secrets"},
-		{"2.14.0 with custom secret", "2.14.0", http.StatusOK, "custom-secret-value", "/secrets"},
-		// Pocket ID reports "unknown" when it is not built with version information.
-		{"unparsable version", "unknown", http.StatusOK, "", "/secret"},
-		// The /api/version/current endpoint was only added in 2.3.0.
-		{"version endpoint missing", "", http.StatusNotFound, "", "/secret"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			expectedPath := "/api/oidc/clients/test-client-id" + tt.expectedEndpoint
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/version/current":
-					assert.Equal(t, "GET", r.Method)
-					if tt.versionStatus != http.StatusOK {
-						w.WriteHeader(tt.versionStatus)
-						return
-					}
-
-					w.Header().Set("Content-Type", "application/json")
-					if err := json.NewEncoder(w).Encode(map[string]string{"currentVersion": tt.currentVersion}); err != nil {
-						t.Errorf("Failed to encode response: %v", err)
-					}
-				case expectedPath:
-					assert.Equal(t, "POST", r.Method)
-
-					bodyBytes, err := io.ReadAll(r.Body)
-					require.NoError(t, err)
-					if len(bodyBytes) > 0 {
-						var req client.ClientSecretRequest
-						require.NoError(t, json.Unmarshal(bodyBytes, &req))
-						assert.Equal(t, tt.customSecret, req.Secret)
-					}
-
-					w.Header().Set("Content-Type", "application/json")
-					if err := json.NewEncoder(w).Encode(map[string]string{"secret": expectedSecret}); err != nil {
-						t.Errorf("Failed to encode response: %v", err)
-					}
-				default:
-					t.Errorf("Unexpected request path: %s", r.URL.Path)
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}))
-			defer server.Close()
-
-			c, err := client.NewClient(server.URL, "test-token", false, 30)
-			require.NoError(t, err)
-
-			secret, err := c.GenerateClientSecret("test-client-id", tt.customSecret)
-			assert.NoError(t, err)
-			assert.Equal(t, expectedSecret, secret.Secret)
-		})
-	}
 }
 
 func TestClient_ErrorHandling(t *testing.T) {
@@ -1156,50 +1069,86 @@ func TestClient_RequireMinVersion_VersionEndpointError(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not determine")
 }
 
-func TestClient_GenerateClientSecret_ReturnsID(t *testing.T) {
+func TestClient_CreateClientSecret(t *testing.T) {
+	expiresAt := "2031-01-01T00:00:00Z"
+
+	tests := []struct {
+		name     string
+		request  *client.ClientSecretCreateRequest
+		wantBody map[string]any
+	}{
+		{"generated", &client.ClientSecretCreateRequest{}, map[string]any{}},
+		{
+			"supplied",
+			&client.ClientSecretCreateRequest{Secret: "supplied-secret-0123456789"},
+			map[string]any{"secret": "supplied-secret-0123456789"},
+		},
+		{
+			"supplied with expiry",
+			&client.ClientSecretCreateRequest{Secret: "supplied-secret-0123456789", ExpiresAt: &expiresAt},
+			map[string]any{"secret": "supplied-secret-0123456789", "expiresAt": expiresAt},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "POST", r.Method)
+				assert.Equal(t, "/api/oidc/clients/test-client-id/secrets", r.URL.Path)
+
+				var body map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				assert.Equal(t, tt.wantBody, body)
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = fmt.Fprint(w, `{"id":"secret-abc","prefix":"abcd","createdAt":"2030-01-01T00:00:00Z","expiresAt":null,"isActive":true,"secret":"value-123"}`)
+			}))
+			defer server.Close()
+
+			c, err := client.NewClient(server.URL, "test-token", false, 30)
+			require.NoError(t, err)
+
+			got, err := c.CreateClientSecret(context.Background(), "test-client-id", tt.request)
+			require.NoError(t, err)
+			assert.Equal(t, "secret-abc", got.ID)
+			assert.Equal(t, "abcd", got.Prefix)
+			assert.Equal(t, "2030-01-01T00:00:00Z", got.CreatedAt)
+			assert.Nil(t, got.ExpiresAt)
+			assert.True(t, got.IsActive)
+			assert.Equal(t, "value-123", got.Secret)
+		})
+	}
+}
+
+func TestClient_CreateClientSecret_Error(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/version/current":
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]string{"currentVersion": "2.16.0"}); err != nil {
-				t.Errorf("Failed to encode response: %v", err)
-			}
-		case "/api/oidc/clients/test-client-id/secrets":
-			assert.Equal(t, "POST", r.Method)
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]string{
-				"id":     "secret-abc",
-				"secret": "value-123",
-			}); err != nil {
-				t.Errorf("Failed to encode response: %v", err)
-			}
-		default:
-			t.Errorf("Unexpected request path: %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":"Cannot create a secret for a public client"}`)
 	}))
 	defer server.Close()
 
 	c, err := client.NewClient(server.URL, "test-token", false, 30)
 	require.NoError(t, err)
 
-	got, err := c.GenerateClientSecret("test-client-id", "")
-	require.NoError(t, err)
-	assert.Equal(t, "secret-abc", got.ID)
-	assert.Equal(t, "value-123", got.Secret)
+	_, err = c.CreateClientSecret(context.Background(), "test-client-id", &client.ClientSecretCreateRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Cannot create a secret for a public client")
+	assert.False(t, client.IsNotFound(err))
 }
 
 func TestClient_DeleteClientSecret(t *testing.T) {
 	tests := []struct {
-		name        string
-		status      int
-		wantErr     bool
-		errContains string
+		name         string
+		status       int
+		wantErr      bool
+		wantNotFound bool
+		errContains  string
 	}{
-		{"deleted", http.StatusNoContent, false, ""},
-		// Already revoked elsewhere, for example in the Pocket ID UI.
-		{"already gone", http.StatusNotFound, false, ""},
-		{"server error", http.StatusInternalServerError, true, "HTTP 500"},
+		{"deleted", http.StatusNoContent, false, false, ""},
+		{"secret or client gone", http.StatusNotFound, true, true, "HTTP 404"},
+		{"server error", http.StatusInternalServerError, true, false, "HTTP 500"},
 	}
 
 	for _, tt := range tests {
@@ -1214,10 +1163,11 @@ func TestClient_DeleteClientSecret(t *testing.T) {
 			c, err := client.NewClient(server.URL, "test-token", false, 30)
 			require.NoError(t, err)
 
-			err = c.DeleteClientSecret("c1", "s1")
+			err = c.DeleteClientSecret(context.Background(), "c1", "s1")
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Equal(t, tt.wantNotFound, client.IsNotFound(err))
 				return
 			}
 			assert.NoError(t, err)
@@ -1270,8 +1220,8 @@ func TestClient_ListClientSecrets(t *testing.T) {
 		assert.Equal(t, "/api/oidc/clients/c1/secrets", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode([]map[string]any{
-			{"id": "s1", "prefix": "abcd", "isActive": true},
-			{"id": "s2", "prefix": "efgh", "isActive": false},
+			{"id": "s1", "prefix": "abcd", "createdAt": "2030-01-01T00:00:00Z", "expiresAt": nil, "isActive": true},
+			{"id": "s2", "prefix": "", "createdAt": "2030-01-02T00:00:00Z", "expiresAt": "2031-01-01T00:00:00Z", "isActive": false},
 		}); err != nil {
 			t.Errorf("Failed to encode response: %v", err)
 		}
@@ -1281,10 +1231,39 @@ func TestClient_ListClientSecrets(t *testing.T) {
 	c, err := client.NewClient(server.URL, "test-token", false, 30)
 	require.NoError(t, err)
 
-	secrets, err := c.ListClientSecrets("c1")
+	secrets, err := c.ListClientSecrets(context.Background(), "c1")
 	require.NoError(t, err)
 	require.Len(t, secrets, 2)
 	assert.Equal(t, "s1", secrets[0].ID)
+	assert.Equal(t, "abcd", secrets[0].Prefix)
+	assert.Equal(t, "2030-01-01T00:00:00Z", secrets[0].CreatedAt)
+	assert.Nil(t, secrets[0].ExpiresAt)
 	assert.True(t, secrets[0].IsActive)
+	require.NotNil(t, secrets[1].ExpiresAt)
+	assert.Equal(t, "2031-01-01T00:00:00Z", *secrets[1].ExpiresAt)
 	assert.False(t, secrets[1].IsActive)
+}
+
+func TestClient_ListClientSecrets_ClientNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":"OIDC client not found"}`)
+	}))
+	defer server.Close()
+
+	c, err := client.NewClient(server.URL, "test-token", false, 30)
+	require.NoError(t, err)
+
+	_, err = c.ListClientSecrets(context.Background(), "c1")
+	require.Error(t, err)
+	assert.True(t, client.IsNotFound(err))
+}
+
+func TestIsNotFound(t *testing.T) {
+	assert.True(t, client.IsNotFound(&client.APIError{StatusCode: http.StatusNotFound, Message: "gone"}))
+	assert.True(t, client.IsNotFound(fmt.Errorf("wrapped: %w", &client.APIError{StatusCode: http.StatusNotFound})))
+	assert.False(t, client.IsNotFound(&client.APIError{StatusCode: http.StatusInternalServerError}))
+	assert.False(t, client.IsNotFound(errors.New("HTTP 404: not an API error")))
+	assert.False(t, client.IsNotFound(nil))
 }

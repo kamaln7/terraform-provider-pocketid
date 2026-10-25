@@ -143,28 +143,17 @@ resource "pocketid_client" "grafana" {
   dark_logo_url = "https://cdn.jsdelivr.net/gh/selfhst/icons/svg/grafana-light.svg"
 }
 
-# Store the client secret securely
-resource "pocketid_client" "api_client" {
-  name = "API Service Client"
-
-  callback_urls = [
-    "https://api.example.com/oauth/callback"
-  ]
-
-  is_public = false
-}
-
-# Output the client secret (be careful with this in production!)
-output "api_client_secret" {
-  value     = pocketid_client.api_client.client_secret
-  sensitive = true
-}
-
 # Use the client ID in other resources
 output "spa_client_id" {
   value = pocketid_client.spa_app.id
 }
 ```
+
+## Client secrets
+
+This resource does not manage the secrets of a client. Create them with the [`pocketid_client_secret`](client_secret.md) resource.
+
+Pocket ID creates a secret for every new confidential client when its `autoCreateOidcClientSecret` setting is on, which is the default. No resource tracks that secret, and Terraform neither reads, rotates nor deletes it. To avoid it, turn the setting off: set `AUTO_CREATE_OIDC_CLIENT_SECRET=false` on the Pocket ID server, which Pocket ID reads only when `UI_CONFIG_DISABLED=true`, or turn it off in the application settings otherwise. Then the secrets of a client are exactly the `pocketid_client_secret` resources that you configure.
 
 ## Logos
 

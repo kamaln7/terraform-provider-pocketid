@@ -54,10 +54,6 @@ type OIDCClient struct {
 	HasDarkLogo                 bool    `json:"hasDarkLogo,omitempty"`
 	LogoURL                     *string `json:"logoUrl,omitempty"`
 	DarkLogoURL                 *string `json:"darkLogoUrl,omitempty"`
-
-	// Secret Pocket-ID generates on create when autoCreateOidcClientSecret is
-	// enabled (after v2.16.0). Only present in the create response.
-	CreatedSecret *ClientSecretResponse `json:"createdSecret,omitempty"`
 }
 
 // OIDCClientCredentials represents federated identity credentials for an OIDC client
@@ -99,27 +95,31 @@ type OIDCClientCreateRequest struct {
 	DarkLogoURL                 *string `json:"darkLogoUrl,omitempty"`
 }
 
-// ClientSecretRequest represents an optional request body for setting a custom
-// client secret. If Secret is empty, the API generates a random secret instead.
-type ClientSecretRequest struct {
-	Secret string `json:"secret,omitempty"`
+// ClientSecretCreateRequest is the request body for creating a client secret.
+// Pocket ID generates the secret when Secret is empty, and the secret does not
+// expire when ExpiresAt is empty.
+type ClientSecretCreateRequest struct {
+	Secret    string  `json:"secret,omitempty"`
+	ExpiresAt *string `json:"expiresAt,omitempty"`
 }
 
-// ClientSecretResponse represents the response when generating a client secret.
-// ID is only returned by the plural /secrets endpoint, added in Pocket ID
-// 2.14.0, and is empty on older instances.
-type ClientSecretResponse struct {
-	ID     string `json:"id"`
-	Secret string `json:"secret"`
-}
-
-// ClientSecret describes an OIDC client secret without its value, as returned
-// by GET /api/oidc/clients/{id}/secrets.
+// ClientSecret describes a client secret without its value, as returned by
+// GET /api/oidc/clients/{id}/secrets.
 type ClientSecret struct {
-	ID        string `json:"id"`
-	Prefix    string `json:"prefix"`
-	CreatedAt string `json:"createdAt"`
-	IsActive  bool   `json:"isActive"`
+	ID string `json:"id"`
+	// Prefix holds the first characters of the secret. It is empty for secrets
+	// Pocket ID migrated from its single-secret column.
+	Prefix    string  `json:"prefix"`
+	CreatedAt string  `json:"createdAt"`
+	ExpiresAt *string `json:"expiresAt"`
+	IsActive  bool    `json:"isActive"`
+}
+
+// ClientSecretCreated is the response to creating a client secret, and the only
+// response that contains the secret's value.
+type ClientSecretCreated struct {
+	ClientSecret
+	Secret string `json:"secret"`
 }
 
 // UpdateAllowedUserGroupsRequest represents a request to update allowed user groups for a client
