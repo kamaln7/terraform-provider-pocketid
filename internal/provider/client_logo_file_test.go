@@ -94,7 +94,7 @@ func TestAccResourceClient_logoFile(t *testing.T) {
 				ResourceName:            resourceName,
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id", "logo", "dark_logo"},
+				ImportStateVerifyIgnore: []string{"logo", "dark_logo"},
 			},
 			{
 				PreConfig: func() {

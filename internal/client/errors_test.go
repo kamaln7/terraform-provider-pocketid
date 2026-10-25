@@ -1,6 +1,7 @@
 package client_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -84,7 +85,7 @@ func TestClient_ListClients_UnmarshalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "error unmarshaling response")
 }
 
-func TestClient_GenerateClientSecret_UnmarshalError(t *testing.T) {
+func TestClient_CreateClientSecret_UnmarshalError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -97,7 +98,7 @@ func TestClient_GenerateClientSecret_UnmarshalError(t *testing.T) {
 	c, err := client.NewClient(server.URL, "test-token", false, 30)
 	require.NoError(t, err)
 
-	_, err = c.GenerateClientSecret("test-id", "")
+	_, err = c.CreateClientSecret(context.Background(), "test-id", &client.ClientSecretCreateRequest{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error unmarshaling response")
 }

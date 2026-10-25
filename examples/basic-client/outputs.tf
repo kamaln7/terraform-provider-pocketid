@@ -5,7 +5,7 @@ output "client_id" {
 
 output "client_secret" {
   description = "The generated client secret (sensitive)"
-  value       = pocketid_client.example.client_secret
+  value       = pocketid_client_secret.example.value
   sensitive   = true
 }
 

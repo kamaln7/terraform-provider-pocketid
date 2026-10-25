@@ -148,7 +148,7 @@ Users cannot authenticate until they complete passkey registration!
 - Client secrets are only shown during resource creation
 - They cannot be retrieved later through the API
 - Store them securely immediately after creation
-- If lost, you'll need to recreate the client or generate a new secret through the UI
+- If lost, replace the secret: `terraform apply -replace=pocketid_client_secret.web_app`
 
 ### Group Restrictions
 

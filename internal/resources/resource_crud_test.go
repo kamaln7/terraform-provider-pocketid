@@ -118,10 +118,9 @@ func TestClientResource_SchemaValidation(t *testing.T) {
 	assert.True(t, ok, "id should be StringAttribute")
 	assert.True(t, idAttr.Computed, "id should be computed")
 
-	clientSecretAttr, ok := attrs["client_secret"].(schema.StringAttribute)
-	assert.True(t, ok, "client_secret should be StringAttribute")
-	assert.True(t, clientSecretAttr.Computed, "client_secret should be computed")
-	assert.True(t, clientSecretAttr.Sensitive, "client_secret should be sensitive")
+	// Client secrets are managed by pocketid_client_secret
+	assert.NotContains(t, attrs, "client_secret")
+	assert.NotContains(t, attrs, "client_secret_id")
 
 	// Optional attributes with defaults
 	isPublicAttr, ok := attrs["is_public"].(schema.BoolAttribute)
@@ -237,6 +236,7 @@ func TestResources_ConfigureErrorHandling(t *testing.T) {
 		resourceFunc func() resource.Resource
 	}{
 		{"ClientResource", resources.NewClientResource},
+		{"ClientSecretResource", resources.NewClientSecretResource},
 		{"UserResource", resources.NewUserResource},
 		{"GroupResource", resources.NewGroupResource},
 	}

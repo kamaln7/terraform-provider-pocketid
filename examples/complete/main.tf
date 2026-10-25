@@ -185,6 +185,15 @@ data "pocketid_users" "all_users" {}
 # List all users (filtering by group not supported in data source)
 data "pocketid_users" "developers" {}
 
+# Client secrets: Pocket ID generates each value, which is returned only once
+resource "pocketid_client_secret" "web_app" {
+  client_id = pocketid_client.web_app.id
+}
+
+resource "pocketid_client_secret" "admin_portal" {
+  client_id = pocketid_client.admin_portal.id
+}
+
 # Outputs
 
 output "spa_client_id" {
@@ -200,6 +209,18 @@ output "web_app_client_id" {
 output "admin_portal_client_id" {
   description = "Client ID for the admin portal"
   value       = pocketid_client.admin_portal.id
+}
+
+output "web_app_client_secret" {
+  description = "Client secret for the web application"
+  value       = pocketid_client_secret.web_app.value
+  sensitive   = true
+}
+
+output "admin_portal_client_secret" {
+  description = "Client secret for the admin portal"
+  value       = pocketid_client_secret.admin_portal.value
+  sensitive   = true
 }
 
 output "total_clients" {

@@ -37,10 +37,9 @@ func TestClientResource_Schema(t *testing.T) {
 	assert.True(t, ok, "id attribute should exist")
 	assert.True(t, idAttr.IsComputed(), "id should be computed")
 
-	clientSecretAttr, ok := schemaResponse.Schema.Attributes["client_secret"]
-	assert.True(t, ok, "client_secret attribute should exist")
-	assert.True(t, clientSecretAttr.IsComputed(), "client_secret should be computed")
-	assert.True(t, clientSecretAttr.IsSensitive(), "client_secret should be sensitive")
+	// Client secrets are managed by pocketid_client_secret
+	assert.NotContains(t, schemaResponse.Schema.Attributes, "client_secret")
+	assert.NotContains(t, schemaResponse.Schema.Attributes, "client_secret_id")
 
 	// Verify optional attributes with defaults
 	isPublicAttr, ok := schemaResponse.Schema.Attributes["is_public"]

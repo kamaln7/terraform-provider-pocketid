@@ -80,7 +80,7 @@ provider "pocketid" {
 # export POCKETID_API_TOKEN="your-api-token"
 ```
 
-### 2. Create an OIDC Client
+### 2. Create an OIDC Client and its Secret
 
 ```hcl
 resource "pocketid_client" "web_app" {
@@ -97,8 +97,14 @@ output "client_id" {
   value = pocketid_client.web_app.id
 }
 
+# Client secrets are their own resource. Pocket ID generates this one;
+# pass a write-only secret_wo instead to choose the value.
+resource "pocketid_client_secret" "web_app" {
+  client_id = pocketid_client.web_app.id
+}
+
 output "client_secret" {
-  value     = pocketid_client.web_app.client_secret
+  value     = pocketid_client_secret.web_app.value
   sensitive = true
 }
 ```
@@ -127,6 +133,7 @@ resource "pocketid_user" "john_doe" {
 ### Available Resources
 
 - `pocketid_client` - Manages OIDC client applications
+- `pocketid_client_secret` - Manages a secret of an OIDC client
 - `pocketid_user` - Manages user accounts
 - `pocketid_group` - Manages user groups
 
@@ -145,6 +152,7 @@ Full documentation is available on the [Terraform Registry](https://registry.ter
 
 - [Provider Configuration](https://registry.terraform.io/providers/trozz/pocketid/latest/docs)
 - [Resource: pocketid_client](https://registry.terraform.io/providers/trozz/pocketid/latest/docs/resources/client)
+- [Resource: pocketid_client_secret](https://registry.terraform.io/providers/trozz/pocketid/latest/docs/resources/client_secret)
 - [Resource: pocketid_user](https://registry.terraform.io/providers/trozz/pocketid/latest/docs/resources/user)
 - [Resource: pocketid_group](https://registry.terraform.io/providers/trozz/pocketid/latest/docs/resources/group)
 

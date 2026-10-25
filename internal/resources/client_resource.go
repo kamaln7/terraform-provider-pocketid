@@ -48,45 +48,6 @@ type clientResource struct {
 	client *client.Client
 }
 
-// clientResourceModel maps the resource schema data.
-// clientSecretIDPlanModifier keeps client_secret_id at its prior value unless
-// client_secret is actually changing. A rotation creates a new secret, so its
-// id is only known after apply; using the prior value there would make the
-// applied result differ from the plan. Keeping the prior value in every other
-// case avoids a spurious "known after apply" diff on unrelated updates.
-type clientSecretIDPlanModifier struct{}
-
-func (m clientSecretIDPlanModifier) Description(context.Context) string {
-	return "Keeps the prior client_secret_id unless client_secret is changing."
-}
-
-func (m clientSecretIDPlanModifier) MarkdownDescription(ctx context.Context) string {
-	return m.Description(ctx)
-}
-
-func (m clientSecretIDPlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
-	// Nothing to carry over when creating or destroying.
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
-		return
-	}
-
-	var stateSecret, planSecret types.String
-	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("client_secret"), &stateSecret)...)
-	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("client_secret"), &planSecret)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	// Mirrors the rotation condition in Update: a rotation only happens when
-	// the planned secret is known, set, and different from the stored one.
-	rotating := !planSecret.IsNull() && !planSecret.IsUnknown() && !planSecret.Equal(stateSecret)
-	if rotating {
-		return
-	}
-
-	resp.PlanValue = req.StateValue
-}
-
 type clientResourceModel struct {
 	ID                                  types.String `tfsdk:"id"`
 	Name                                types.String `tfsdk:"name"`
@@ -107,8 +68,6 @@ type clientResourceModel struct {
 	RequiresPushedAuthorizationRequests types.Bool   `tfsdk:"requires_pushed_authorization_requests"`
 	LaunchURL                           types.String `tfsdk:"launch_url"`
 	FederatedIdentities                 types.List   `tfsdk:"federated_identities"`
-	ClientSecret                        types.String `tfsdk:"client_secret"`
-	ClientSecretID                      types.String `tfsdk:"client_secret_id"`
 }
 
 // clientFederatedIdentityModel maps a single federated identity nested object.
@@ -142,7 +101,9 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		Description: "Manages an OIDC client in Pocket-ID.",
 		MarkdownDescription: `Manages an OIDC client in Pocket-ID. OIDC clients are applications that can authenticate users through Pocket-ID.
 
-~> **Note** The client secret is only available during resource creation and cannot be retrieved later. Store it securely.`,
+This resource does not manage the client's secrets. Use the ` + "`pocketid_client_secret`" + ` resource to create them.
+
+~> **Note** When Pocket ID's ` + "`autoCreateOidcClientSecret`" + ` setting is on, which is its default, Pocket ID creates a secret for every new confidential client. No resource tracks that secret and Terraform leaves it alone. Set ` + "`AUTO_CREATE_OIDC_CLIENT_SECRET=false`" + ` on the Pocket ID server (Pocket ID reads it only when ` + "`UI_CONFIG_DISABLED=true`" + `; otherwise turn the setting off in the application settings) so that the secrets of a client are exactly the ` + "`pocketid_client_secret`" + ` resources that you configure.`,
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "The ID of the OIDC client.",
@@ -173,34 +134,6 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplaceIfConfigured(),
-				},
-			},
-			"client_secret": schema.StringAttribute{
-				Description: "The client secret for non-public clients. Only available during resource creation for non-public clients." +
-					"When specified, it must have at least a length of 16 and consist only of printable ASCII characters." +
-					"It is recommended to leave this empty and let Pocket ID automatically generate a secret.",
-				Optional:  true,
-				Computed:  true,
-				Sensitive: true,
-				Validators: []validator.String{
-					stringvalidator.LengthAtLeast(16), // Matches the API binding (min=16)
-					stringvalidator.RegexMatches(
-						regexp.MustCompile(`^[\x20-\x7E]+$`),
-						"Client secret must contain only printable ASCII characters",
-					),
-				},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
-			},
-			"client_secret_id": schema.StringAttribute{
-				Description: "Identifier of the client secret currently tracked by Terraform, used to revoke the " +
-					"previous secret when client_secret is rotated. Empty on Pocket ID versions before 2.14.0, " +
-					"which keep only one secret per client. Resources created before this attribute existed do " +
-					"not revoke their previous secret on the first rotation; revoke it in the Pocket ID UI.",
-				Computed: true,
-				PlanModifiers: []planmodifier.String{
-					clientSecretIDPlanModifier{},
 				},
 			},
 			"callback_urls": schema.ListAttribute{
@@ -388,16 +321,6 @@ func (r *clientResource) ValidateConfig(ctx context.Context, req resource.Valida
 				"Set is_public = false to use Pushed Authorization Requests.",
 		)
 	}
-
-	// Public clients have no secret, so a configured client_secret would be
-	// silently dropped by Create, producing an inconsistent-result error.
-	if config.IsPublic.ValueBool() && !config.ClientSecret.IsNull() && !config.ClientSecret.IsUnknown() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("client_secret"),
-			"Invalid client secret configuration",
-			"client_secret can only be set for confidential clients. Set is_public = false to use a custom client secret.",
-		)
-	}
 }
 
 // Create creates the resource and sets the initial Terraform state.
@@ -408,18 +331,6 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
-	}
-
-	// Check version compatibility before making any API calls.
-	if !plan.IsPublic.ValueBool() && !plan.ClientSecret.IsNull() && !plan.ClientSecret.IsUnknown() {
-		if err := r.client.RequireMinVersion("setting a custom client_secret", client.MinVersionCustomClientSecret); err != nil {
-			resp.Diagnostics.AddAttributeError(
-				path.Root("client_secret"),
-				"Pocket ID version too old",
-				err.Error(),
-			)
-			return
-		}
 	}
 
 	if federatedIdentitiesUsePublicKeys(ctx, &plan) {
@@ -490,41 +401,8 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 		plan.RequiresPushedAuthorizationRequests = types.BoolValue(*clientResp.RequiresPushedAuthorizationRequests)
 	}
 
-	// Generate client secret for non-public clients
-	if !plan.IsPublic.ValueBool() {
-		var customSecret string
-		if !plan.ClientSecret.IsNull() && !plan.ClientSecret.IsUnknown() {
-			customSecret = plan.ClientSecret.ValueString()
-		}
-		tflog.Debug(ctx, "Generating client secret for non-public client")
-		secret, err := r.client.GenerateClientSecret(clientResp.ID, customSecret)
-		if err != nil {
-			// Try to clean up the created client
-			_ = r.client.DeleteClient(clientResp.ID)
-			resp.Diagnostics.AddError(
-				"Error generating client secret",
-				"Could not generate client secret, the client was deleted. Error: "+err.Error(),
-			)
-			return
-		}
-		// Revoke the secret Pocket-ID created alongside the client, otherwise it
-		// stays valid without Terraform tracking it.
-		if clientResp.CreatedSecret != nil {
-			if err := r.client.DeleteClientSecret(clientResp.ID, clientResp.CreatedSecret.ID); err != nil {
-				_ = r.client.DeleteClient(clientResp.ID)
-				resp.Diagnostics.AddError(
-					"Error revoking auto-created client secret",
-					"Could not revoke the client secret created by Pocket-ID, the client was deleted. Error: "+err.Error(),
-				)
-				return
-			}
-		}
-		plan.ClientSecret = types.StringValue(secret.Secret)
-		plan.ClientSecretID = types.StringValue(secret.ID)
-	} else {
-		plan.ClientSecret = types.StringNull()
-		plan.ClientSecretID = types.StringNull()
-	}
+	// The client's secrets are not part of this resource. A secret Pocket ID
+	// creates alongside the client (autoCreateOidcClientSecret) is left alone.
 
 	// Handle allowed user groups
 	if !plan.AllowedUserGroups.IsNull() && !plan.AllowedUserGroups.IsUnknown() {
@@ -697,7 +575,7 @@ func (r *clientResource) Read(ctx context.Context, req resource.ReadRequest, res
 		state.DarkLogo = types.ObjectNull(sourceFileAttrTypes)
 	}
 
-	// Note: client_secret is not updated from Read as it's only available during creation
+	// Client secrets are not part of this resource and are not read.
 
 	// Set the state
 	diags = resp.State.Set(ctx, &state)
@@ -940,55 +818,8 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 		}
 	}
 
-	// The client secret cannot be retrieved after creation, so preserve the
-	// value from state by default. If the user configures a new value, rotate
-	// the secret via the API.
-	if !plan.ClientSecret.IsNull() && !plan.ClientSecret.IsUnknown() &&
-		plan.ClientSecret.ValueString() != state.ClientSecret.ValueString() {
-		if err := r.client.RequireMinVersion("setting a custom client_secret", client.MinVersionCustomClientSecret); err != nil {
-			resp.Diagnostics.AddAttributeError(
-				path.Root("client_secret"),
-				"Pocket ID version too old",
-				err.Error(),
-			)
-			return
-		}
-		tflog.Debug(ctx, "Rotating client secret", map[string]any{
-			"id": plan.ID.ValueString(),
-		})
-		secret, err := r.client.GenerateClientSecret(plan.ID.ValueString(), plan.ClientSecret.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error updating client secret",
-				"Could not update client secret: "+err.Error(),
-			)
-			return
-		}
-		plan.ClientSecret = types.StringValue(secret.Secret)
-		plan.ClientSecretID = types.StringValue(secret.ID)
-
-		// The new secret is live at this point. Revoke the one it replaced, so
-		// a rotation does not leave the previous credential usable. Failing to
-		// revoke is reported as a warning rather than an error: the rotation
-		// itself succeeded, and erroring here would lose the new secret's ID
-		// and make the next rotation unable to clean up either.
-		previousID := state.ClientSecretID
-		if r.client.SupportsClientSecretRevocation() && !previousID.IsNull() && previousID.ValueString() != "" {
-			if err := r.client.DeleteClientSecret(plan.ID.ValueString(), previousID.ValueString()); err != nil {
-				resp.Diagnostics.AddWarning(
-					"Previous client secret was not revoked",
-					fmt.Sprintf(
-						"The client secret was rotated, but the previous secret (id %s) could not be revoked "+
-							"and is still usable. Revoke it in the Pocket ID UI. Error: %s",
-						previousID.ValueString(), err.Error(),
-					),
-				)
-			}
-		}
-	} else {
-		plan.ClientSecret = state.ClientSecret
-		plan.ClientSecretID = state.ClientSecretID
-	}
+	// Client secrets are not part of this resource, so an update leaves them
+	// alone. Pocket ID keeps them when a client is updated.
 
 	// Set the state
 	diags = resp.State.Set(ctx, &plan)

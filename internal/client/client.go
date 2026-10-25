@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -22,12 +23,7 @@ import (
 
 // Minimum Pocket ID versions required for certain features.
 const (
-	MinVersionCustomUserID       = "2.12.0"
-	MinVersionCustomClientSecret = "2.12.0"
-
-	// MinVersionClientSecretsEndpoint is the first version that serves the
-	// plural /secrets endpoint, which replaced /secret.
-	MinVersionClientSecretsEndpoint = "2.14.0"
+	MinVersionCustomUserID = "2.12.0"
 
 	// MinVersionFederatedPublicKeys is the first version that accepts public
 	// keys on a federated identity.
@@ -139,18 +135,20 @@ func (c *Client) RequireMinVersion(feature, minVersion string) error {
 	return nil
 }
 
-// usesClientSecretsEndpoint reports whether the connected instance serves the
-// plural /secrets endpoint that replaced /secret in 2.14.0. When the version
-// cannot be determined, because /api/version/current only exists since 2.3.0 or
-// because the instance reports a non-semver version, fall back to the legacy
-// endpoint.
-func (c *Client) usesClientSecretsEndpoint() bool {
-	current, err := c.currentVersion()
-	if err != nil {
-		return false
-	}
+// APIError is an error response from the Pocket ID API.
+type APIError struct {
+	StatusCode int
+	Message    string
+}
 
-	return !current.LessThan(goversion.Must(goversion.NewVersion(MinVersionClientSecretsEndpoint)))
+func (e *APIError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+// IsNotFound reports whether err is a 404 response from the Pocket ID API.
+func IsNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 // doRequest performs an HTTP request to the Pocket-ID API
@@ -377,7 +375,7 @@ func (c *Client) doSingleRequest(ctx context.Context, method, endpoint, contentT
 					RetryAfter: retryAfter,
 				}
 			}
-			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+			return nil, &APIError{StatusCode: resp.StatusCode, Message: string(respBody)}
 		}
 		tflog.Error(ctx, "API Error", map[string]interface{}{
 			"status_code": resp.StatusCode,
@@ -392,7 +390,7 @@ func (c *Client) doSingleRequest(ctx context.Context, method, endpoint, contentT
 				RetryAfter: retryAfter,
 			}
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, errResp.Error)
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: errResp.Error}
 	}
 
 	return respBody, nil
@@ -493,40 +491,28 @@ func (c *Client) UpdateClientAllowedUserGroups(clientID string, groupIDs []strin
 	return err
 }
 
-// GenerateClientSecret sets the secret for an OIDC client.
-// The secret is optional and a random secret is generated if it is left empty.
-//
-// The returned ID identifies the created secret so it can be revoked later. It
-// is empty on Pocket ID before 2.14.0, where the singular endpoint replaced the
-// client's only secret and there is nothing to revoke.
-func (c *Client) GenerateClientSecret(clientID string, secret string) (ClientSecretResponse, error) {
-	endpoint := fmt.Sprintf("/api/oidc/clients/%s/secret", clientID)
-	if c.usesClientSecretsEndpoint() {
-		endpoint += "s"
-	}
-
-	req := ClientSecretRequest{Secret: secret}
-	body, err := c.doRequest("POST", endpoint, req)
+// CreateClientSecret adds a secret to an OIDC client, leaving its other
+// secrets usable. When the request has no secret, Pocket ID generates one. The
+// value is only returned by this call.
+func (c *Client) CreateClientSecret(ctx context.Context, clientID string, createReq *ClientSecretCreateRequest) (*ClientSecretCreated, error) {
+	body, err := c.doRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("/api/oidc/clients/%s/secrets", clientID), createReq)
 	if err != nil {
-		return ClientSecretResponse{}, err
+		return nil, err
 	}
 
-	var result ClientSecretResponse
+	var result ClientSecretCreated
 	if err := json.Unmarshal(body, &result); err != nil {
-		return ClientSecretResponse{}, fmt.Errorf("error unmarshaling response: %w", err)
+		return nil, fmt.Errorf("error unmarshaling response: %w", err)
 	}
 
-	return result, nil
+	return &result, nil
 }
 
-// DeleteClientSecret revokes a single secret of an OIDC client. A secret that
-// is already gone is not an error: it may have been revoked in the Pocket ID
-// UI. Only available from Pocket ID 2.14.0.
-func (c *Client) DeleteClientSecret(clientID, secretID string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/oidc/clients/%s/secrets/%s", clientID, secretID), nil)
-	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
-		return nil
-	}
+// DeleteClientSecret deletes a single secret of an OIDC client, making it
+// unusable at once. A 404 is returned as an error for which IsNotFound is
+// true: either the secret or the client is gone.
+func (c *Client) DeleteClientSecret(ctx context.Context, clientID, secretID string) error {
+	_, err := c.doRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("/api/oidc/clients/%s/secrets/%s", clientID, secretID), nil)
 	return err
 }
 
@@ -551,10 +537,10 @@ func (c *Client) UpdateClientLogo(clientID string, light bool, filename string, 
 	return err
 }
 
-// ListClientSecrets returns the secrets of an OIDC client without their values.
-// Only available from Pocket ID 2.14.0.
-func (c *Client) ListClientSecrets(clientID string) ([]ClientSecret, error) {
-	body, err := c.doRequest("GET", fmt.Sprintf("/api/oidc/clients/%s/secrets", clientID), nil)
+// ListClientSecrets returns the secrets of an OIDC client, expired ones
+// included, without their values.
+func (c *Client) ListClientSecrets(ctx context.Context, clientID string) ([]ClientSecret, error) {
+	body, err := c.doRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("/api/oidc/clients/%s/secrets", clientID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -565,12 +551,6 @@ func (c *Client) ListClientSecrets(clientID string) ([]ClientSecret, error) {
 	}
 
 	return result, nil
-}
-
-// SupportsClientSecretRevocation reports whether the connected instance exposes
-// the per-secret endpoints needed to revoke a superseded secret.
-func (c *Client) SupportsClientSecretRevocation() bool {
-	return c.usesClientSecretsEndpoint()
 }
 
 // User methods

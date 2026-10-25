@@ -34,16 +34,14 @@ func TestAccResourceClient_basic(t *testing.T) {
 					resource.TestCheckResourceAttr(resourceName, "is_public", "false"),
 					resource.TestCheckResourceAttr(resourceName, "pkce_enabled", "true"),
 					resource.TestCheckResourceAttrSet(resourceName, "id"),
-					resource.TestCheckResourceAttrSet(resourceName, "client_secret"),
 					resource.TestCheckResourceAttr(resourceName, "has_logo", "false"),
 				),
 			},
 			// ImportState testing
 			{
-				ResourceName:            resourceName,
-				ImportState:             true,
-				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"client_secret"}, // Secret can't be retrieved after creation
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 			// Update and Read testing
 			{
@@ -69,7 +67,6 @@ func TestAccResourceClient_publicClient(t *testing.T) {
 					resource.TestCheckResourceAttr(resourceName, "name", "public-client"),
 					resource.TestCheckResourceAttr(resourceName, "is_public", "true"),
 					resource.TestCheckResourceAttr(resourceName, "pkce_enabled", "true"),
-					resource.TestCheckNoResourceAttr(resourceName, "client_secret"),
 				),
 			},
 		},
@@ -411,25 +408,6 @@ func TestAccResourceClient_updateCallbackURLs(t *testing.T) {
 	})
 }
 
-func TestAccResourceClient_generateSecret(t *testing.T) {
-	resourceName := "pocketid_client.test"
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			// Create client and verify secret is set
-			{
-				Config: testAccResourceClientConfig_basic("test-client", "https://example.com/callback"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet(resourceName, "client_secret"),
-					testAccCheckClientSecretNotEmpty(resourceName),
-				),
-			},
-		},
-	})
-}
-
 func TestAccResourceClient_longName(t *testing.T) {
 	longName := "This is a very long client name that might exceed typical length limits and tests the system's ability to handle long strings"
 
@@ -483,24 +461,6 @@ resource "pocketid_client" "test" {
 `, name)
 }
 
-// Test helper functions
-
-func testAccCheckClientSecretNotEmpty(resourceName string) resource.TestCheckFunc {
-	return func(s *terraform.State) error {
-		rs, ok := s.RootModule().Resources[resourceName]
-		if !ok {
-			return fmt.Errorf("resource not found: %s", resourceName)
-		}
-
-		secret := rs.Primary.Attributes["client_secret"]
-		if secret == "" {
-			return fmt.Errorf("client_secret is empty")
-		}
-
-		return nil
-	}
-}
-
 func TestAccResourceClient_requiresPushedAuthorizationRequests(t *testing.T) {
 	resourceName := "pocketid_client.test"
 
@@ -526,109 +486,6 @@ func TestAccResourceClient_requiresPushedAuthorizationRequests(t *testing.T) {
 			},
 		},
 	})
-}
-
-func TestAccResourceClient_customSecret(t *testing.T) {
-	resourceName := "pocketid_client.test"
-	customSecret := "custom-secret-0123456789abcdef"
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			// Create with an explicit client_secret and verify it is honored
-			// rather than overwritten by a generated value.
-			{
-				Config: testAccResourceClientConfig_withSecret("secret-client", customSecret),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "client_secret", customSecret),
-				),
-			},
-			// Re-applying the same config should not produce a diff.
-			{
-				Config:   testAccResourceClientConfig_withSecret("secret-client", customSecret),
-				PlanOnly: true,
-			},
-		},
-	})
-}
-
-func TestAccResourceClient_secretRotation(t *testing.T) {
-	resourceName := "pocketid_client.test"
-	initialSecret := "initial-secret-0123456789abcdef"
-	rotatedSecret := "rotated-secret-abcdef0123456789"
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccResourceClientConfig_withSecret("rotate-client", initialSecret),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "client_secret", initialSecret),
-				),
-			},
-			// Changing client_secret must rotate it in place via an Update
-			// call, not force replacement of the client.
-			{
-				Config: testAccResourceClientConfig_withSecret("rotate-client", rotatedSecret),
-				ConfigPlanChecks: resource.ConfigPlanChecks{
-					PreApply: []plancheck.PlanCheck{
-						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionUpdate),
-					},
-				},
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "client_secret", rotatedSecret),
-				),
-			},
-		},
-	})
-}
-
-func TestAccResourceClient_secretPreservedWhenRemovedFromConfig(t *testing.T) {
-	resourceName := "pocketid_client.test"
-	customSecret := "preserved-secret-0123456789abcd"
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			// Create with an explicit secret.
-			{
-				Config: testAccResourceClientConfig_withSecret("keep-secret-client", customSecret),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "client_secret", customSecret),
-				),
-			},
-			// Remove client_secret from the config entirely. Since it can't
-			// be retrieved from the API after creation, the provider must
-			// preserve the previously configured value rather than rotating
-			// it or producing an inconsistent-result error.
-			{
-				Config: testAccResourceClientConfig_basic("keep-secret-client", "https://example.com/callback"),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "client_secret", customSecret),
-				),
-			},
-			// Re-applying without client_secret should not keep producing a
-			// diff (i.e. no perpetual drift/rotation attempts).
-			{
-				Config:   testAccResourceClientConfig_basic("keep-secret-client", "https://example.com/callback"),
-				PlanOnly: true,
-			},
-		},
-	})
-}
-
-func testAccResourceClientConfig_withSecret(name, secret string) string {
-	return testAccProviderConfig() + fmt.Sprintf(`
-resource "pocketid_client" "test" {
-  name          = %[1]q
-  callback_urls = ["https://example.com/callback"]
-  is_public     = false
-  client_secret = %[2]q
-}
-`, name, secret)
 }
 
 func testAccResourceClientConfig_par(name string, par bool) string {
@@ -710,62 +567,6 @@ func TestAccResourceClient_preservesUnmanagedFields(t *testing.T) {
 	})
 }
 
-// TestAccResourceClient_secretRotationRevokesPrevious checks that rotating
-// client_secret revokes the secret it replaced. From Pocket ID 2.14.0 the
-// create-secret endpoint is additive, so without an explicit revoke the old
-// secret stays usable indefinitely.
-func TestAccResourceClient_secretRotationRevokesPrevious(t *testing.T) {
-	resourceName := "pocketid_client.test"
-	initialSecret := "revoke-initial-0123456789abcdef"
-	rotatedSecret := "revoke-rotated-abcdef0123456789"
-
-	var clientID, firstSecretID string
-
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				Config: testAccResourceClientConfig_withSecret("revoke-client", initialSecret),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet(resourceName, "client_secret_id"),
-					resource.TestCheckResourceAttrWith(resourceName, "id", func(v string) error {
-						clientID = v
-						return nil
-					}),
-					resource.TestCheckResourceAttrWith(resourceName, "client_secret_id", func(v string) error {
-						firstSecretID = v
-						return nil
-					}),
-					func(*terraform.State) error {
-						return checkClientSecretCount(clientID, 1)
-					},
-				),
-			},
-			{
-				Config: testAccResourceClientConfig_withSecret("revoke-client", rotatedSecret),
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr(resourceName, "client_secret", rotatedSecret),
-					// The tracked id must have moved on from the first secret.
-					resource.TestCheckResourceAttrWith(resourceName, "client_secret_id", func(v string) error {
-						if v == firstSecretID {
-							return fmt.Errorf("client_secret_id did not change after rotation")
-						}
-						return nil
-					}),
-					// And the superseded secret must be gone, not merely inactive.
-					func(*terraform.State) error {
-						if err := checkClientSecretCount(clientID, 1); err != nil {
-							return err
-						}
-						return checkClientSecretAbsent(clientID, firstSecretID)
-					},
-				),
-			},
-		},
-	})
-}
-
 // testAccResourceClientConfig_logoURLs renders a client with the given logo
 // URLs; an empty URL leaves that attribute out of the configuration.
 func testAccResourceClientConfig_logoURLs(name, logoURL, darkLogoURL string) string {
@@ -821,7 +622,7 @@ func TestAccResourceClient_logoURL(t *testing.T) {
 				ResourceName:            resourceName,
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"client_secret", "logo_url", "dark_logo_url"},
+				ImportStateVerifyIgnore: []string{"logo_url", "dark_logo_url"},
 			},
 			{
 				Config: testAccResourceClientConfig_logoURLs("logo-test", testDarkLogoURL, testLogoURL),
@@ -1051,7 +852,7 @@ func TestAccResourceClient_federatedPublicKeys(t *testing.T) {
 				ImportState:       true,
 				ImportStateVerify: true,
 				ImportStateVerifyIgnore: []string{
-					"client_secret", "client_secret_id", "federated_identities.0.public_keys",
+					"federated_identities.0.public_keys",
 				},
 				ImportStateCheck: func(states []*terraform.InstanceState) error {
 					if len(states) != 1 {
@@ -1211,10 +1012,9 @@ func TestAccResourceClient_skipConsent(t *testing.T) {
 			},
 			// Imported with the value Pocket ID holds.
 			{
-				ResourceName:            resourceName,
-				ImportState:             true,
-				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id"},
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 			// Removed from the configuration: not managed, so the value stays.
 			{
@@ -1286,15 +1086,13 @@ func TestAccResourceClient_noCallbackURLs(t *testing.T) {
 				Config: testAccResourceClientConfig_callbacks("no-callbacks", ""),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttrSet(resourceName, "id"),
-					resource.TestCheckResourceAttrSet(resourceName, "client_secret"),
 					resource.TestCheckNoResourceAttr(resourceName, "callback_urls.#"),
 				),
 			},
 			{
-				ResourceName:            resourceName,
-				ImportState:             true,
-				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id"},
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 			// Adding a callback URL is an in-place update.
 			{
@@ -1357,10 +1155,9 @@ func TestAccResourceClient_clientID(t *testing.T) {
 			// Importing by id fills client_id, so the configured value is no
 			// difference.
 			{
-				ResourceName:            resourceName,
-				ImportState:             true,
-				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id"},
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
 			},
 			// Not set: the client keeps the ID it has.
 			{
