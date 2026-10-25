@@ -1,6 +1,7 @@
 package client_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -227,4 +228,42 @@ func TestClient_ListClientAPIs_UnmarshalError(t *testing.T) {
 	_, err := c.ListClientAPIs("client-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error unmarshaling response")
+}
+
+// The client ID of a metadata-document client is a URL. Pocket-ID reads it from
+// a path as "~" and its unpadded base64url encoding, and a plain ID as is.
+func TestClient_APIClientAccess_URLClientIDPath(t *testing.T) {
+	const urlID = "https://client.example.com/metadata.json"
+	encoded := "~" + base64.RawURLEncoding.EncodeToString([]byte(urlID))
+
+	var calls []string
+	c := newAPITestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// RawPath is set when the path has escapes; EscapedPath is what was sent.
+		calls = append(calls, r.Method+" "+r.URL.EscapedPath())
+		switch r.Method {
+		case http.MethodPut:
+			_, _ = w.Write([]byte(`{"userDelegatedAccess":true,"clientAccess":false,"userDelegatedPermissionIds":[],"clientPermissionIds":[]}`))
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+
+	_, err := c.SetAPIClientAccess("api-1", urlID, &client.APIClientGrant{UserDelegatedAccess: true})
+	require.NoError(t, err)
+	_, err = c.ListClientAPIs(urlID)
+	require.NoError(t, err)
+	require.NoError(t, c.RemoveAPIClientAccess("api-1", urlID))
+	_, err = c.ListClientAPIs("plain.client-1_x")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"PUT /api/apis/api-1/clients/" + encoded,
+		"GET /api/api-access/" + encoded + "/apis",
+		"DELETE /api/apis/api-1/clients/" + encoded,
+		"GET /api/api-access/plain.client-1_x/apis",
+	}, calls)
+	assert.NotContains(t, encoded, "/")
+	assert.NotContains(t, encoded, "=")
 }

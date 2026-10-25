@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -64,6 +65,8 @@ func (f *fakeAccessServer) handler(t *testing.T) http.HandlerFunc {
 			applied.ClientAccess = req.ClientAccess || len(applied.ClientPermissionIDs) > 0
 			f.grant = &applied
 			_ = json.NewEncoder(w).Encode(applied)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/apis/api-1":
+			_, _ = w.Write([]byte(`{"id":"api-1","name":"A","resource":"https://a","permissions":[{"id":"perm-1","key":"a","name":"A"},{"id":"perm-2","key":"b","name":"B"}]}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/apis/api-1/clients/client-1":
 			f.grant = nil
 			w.WriteHeader(http.StatusNoContent)
@@ -268,7 +271,7 @@ func TestAPIClientAccessResource_Create(t *testing.T) {
 	r.Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
 
 	require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
-	assert.Equal(t, []string{"PUT /api/apis/api-1/clients/client-1"}, f.calls)
+	assert.Equal(t, []string{"GET /api/apis/api-1", "PUT /api/apis/api-1/clients/client-1"}, f.calls)
 	var id types.String
 	require.False(t, resp.State.GetAttribute(ctx, path.Root("id"), &id).HasError())
 	assert.Equal(t, "api-1/client-1", id.ValueString())
@@ -290,10 +293,10 @@ func TestAPIClientAccessResource_CreateRefusesWhatPocketIDDoesNotApply(t *testin
 			want:   "client_access is false, not true",
 		},
 		{
-			name:   "a permission of another API is dropped",
+			name:   "a permission of another API is refused before anything is written",
 			server: &fakeAccessServer{},
 			values: accessValues{id: types.StringUnknown(), userAccess: types.BoolValue(false), userIDs: accessIDs(), clientAcc: types.BoolValue(true), clientIDs: accessIDs("perm-1", "other-api-perm")},
-			want:   "client_permission_ids not applied (not permissions of the API, or a public client?): other-api-perm",
+			want:   "client_permission_ids are not permissions of the API: other-api-perm",
 		},
 	}
 
@@ -305,6 +308,10 @@ func TestAPIClientAccessResource_CreateRefusesWhatPocketIDDoesNotApply(t *testin
 
 			require.True(t, resp.Diagnostics.HasError())
 			assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), tc.want)
+			if strings.Contains(tc.want, "not permissions of the API") {
+				assert.NotContains(t, tc.server.calls, "PUT /api/apis/api-1/clients/client-1")
+				return
+			}
 			assert.Contains(t, tc.server.calls, "DELETE /api/apis/api-1/clients/client-1", "the grant that was not asked for is removed")
 			assert.Nil(t, tc.server.grant)
 		})
@@ -363,6 +370,47 @@ func TestAPIClientAccessResource_Update(t *testing.T) {
 	assert.Equal(t, []string{"perm-2"}, f.grant.ClientPermissionIDs)
 }
 
+// A permission of another API in an update is refused before anything is
+// written, so the access the client has stays.
+func TestAPIClientAccessResource_UpdateWithForeignPermissionChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeAccessServer{grant: &client.APIClientGrant{ClientAccess: true, ClientPermissionIDs: []string{"perm-1"}, UserDelegatedPermissionIDs: []string{}}}
+	r, s := newAccessResource(t, f)
+
+	before := accessValues{id: types.StringValue("api-1/client-1"), userAccess: types.BoolValue(false), userIDs: accessIDs(), clientAcc: types.BoolValue(true), clientIDs: accessIDs("perm-1")}
+	after := accessValues{id: types.StringValue("api-1/client-1"), userAccess: types.BoolValue(false), userIDs: accessIDs(), clientAcc: types.BoolValue(true), clientIDs: accessIDs("perm-1", "other-api-perm")}
+	resp := resource.UpdateResponse{State: accessState(ctx, t, s, before)}
+	r.Update(ctx, resource.UpdateRequest{Plan: accessPlan(ctx, t, s, after), State: accessState(ctx, t, s, before)}, &resp)
+
+	require.True(t, resp.Diagnostics.HasError())
+	assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "client_permission_ids are not permissions of the API: other-api-perm")
+	assert.NotContains(t, f.calls, "PUT /api/apis/api-1/clients/client-1")
+	assert.NotContains(t, f.calls, "DELETE /api/apis/api-1/clients/client-1")
+	require.NotNil(t, f.grant)
+	assert.Equal(t, []string{"perm-1"}, f.grant.ClientPermissionIDs)
+}
+
+// What Pocket ID drops only after the write (client access of a public client)
+// puts the previous access back instead of deleting it.
+func TestAPIClientAccessResource_UpdateRestoresThePreviousAccess(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeAccessServer{public: true, grant: &client.APIClientGrant{UserDelegatedAccess: true, UserDelegatedPermissionIDs: []string{"perm-2"}, ClientPermissionIDs: []string{}}}
+	r, s := newAccessResource(t, f)
+
+	before := accessValues{id: types.StringValue("api-1/client-1"), userAccess: types.BoolValue(true), userIDs: accessIDs("perm-2"), clientAcc: types.BoolValue(false), clientIDs: accessIDs()}
+	after := accessValues{id: types.StringValue("api-1/client-1"), userAccess: types.BoolValue(true), userIDs: accessIDs("perm-2"), clientAcc: types.BoolValue(true), clientIDs: accessIDs()}
+	resp := resource.UpdateResponse{State: accessState(ctx, t, s, before)}
+	r.Update(ctx, resource.UpdateRequest{Plan: accessPlan(ctx, t, s, after), State: accessState(ctx, t, s, before)}, &resp)
+
+	require.True(t, resp.Diagnostics.HasError())
+	assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "the previous access was put back")
+	assert.NotContains(t, f.calls, "DELETE /api/apis/api-1/clients/client-1")
+	require.NotNil(t, f.grant)
+	assert.True(t, f.grant.UserDelegatedAccess)
+	assert.Equal(t, []string{"perm-2"}, f.grant.UserDelegatedPermissionIDs)
+	assert.False(t, f.grant.ClientAccess)
+}
+
 func TestAPIClientAccessResource_Delete(t *testing.T) {
 	ctx := context.Background()
 	state := accessValues{id: types.StringValue("api-1/client-1"), userAccess: types.BoolValue(false), userIDs: accessIDs(), clientAcc: types.BoolValue(true), clientIDs: accessIDs("perm-1")}
@@ -394,7 +442,19 @@ func TestAPIClientAccessResource_ImportState(t *testing.T) {
 		assert.Equal(t, "client-1", clientID.ValueString())
 	})
 
-	for _, bad := range []string{"", "api-1", "api-1/", "/client-1", "a/b/c"} {
+	t.Run("a URL client ID keeps its slashes", func(t *testing.T) {
+		resp := resource.ImportStateResponse{State: emptyAccessState(ctx, s)}
+		r.(resource.ResourceWithImportState).ImportState(ctx, resource.ImportStateRequest{ID: "api-1/https://client.example.com/metadata.json"}, &resp)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		var apiID, clientID types.String
+		require.False(t, resp.State.GetAttribute(ctx, path.Root("api_id"), &apiID).HasError())
+		require.False(t, resp.State.GetAttribute(ctx, path.Root("client_id"), &clientID).HasError())
+		assert.Equal(t, "api-1", apiID.ValueString())
+		assert.Equal(t, "https://client.example.com/metadata.json", clientID.ValueString())
+	})
+
+	for _, bad := range []string{"", "api-1", "api-1/", "/client-1"} {
 		t.Run("invalid "+bad, func(t *testing.T) {
 			resp := resource.ImportStateResponse{State: emptyAccessState(ctx, s)}
 			r.(resource.ResourceWithImportState).ImportState(ctx, resource.ImportStateRequest{ID: bad}, &resp)

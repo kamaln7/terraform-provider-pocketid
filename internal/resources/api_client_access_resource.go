@@ -208,7 +208,7 @@ func (r *apiClientAccessResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	if err := r.setAccess(ctx, plan); err != nil {
+	if err := r.setAccess(ctx, plan, false); err != nil {
 		resp.Diagnostics.AddError("Error setting API client access", err.Error())
 		return
 	}
@@ -268,7 +268,7 @@ func (r *apiClientAccessResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 
-	if err := r.setAccess(ctx, plan); err != nil {
+	if err := r.setAccess(ctx, plan, true); err != nil {
 		resp.Diagnostics.AddError("Error setting API client access", err.Error())
 		return
 	}
@@ -301,8 +301,10 @@ func (r *apiClientAccessResource) Delete(ctx context.Context, req resource.Delet
 // ImportState imports an existing resource into Terraform. The ID is the API ID
 // and the client ID, separated by a `/`.
 func (r *apiClientAccessResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	// The client ID of a metadata-document client is a URL, so only the first
+	// `/` separates the API ID, which has none.
 	apiID, clientID, ok := strings.Cut(req.ID, "/")
-	if !ok || apiID == "" || clientID == "" || strings.Contains(clientID, "/") {
+	if !ok || apiID == "" || clientID == "" {
 		resp.Diagnostics.AddError(
 			"Invalid import ID",
 			fmt.Sprintf("Expected <api_id>/<client_id>, got %q.", req.ID),
@@ -319,7 +321,13 @@ func (r *apiClientAccessResource) ImportState(ctx context.Context, req resource.
 // that Pocket-ID applied exactly that. Pocket-ID ignores permission IDs that are
 // not the API's and drops client access for a public client, both with a 200,
 // which would otherwise surface as a state that differs from the plan.
-func (r *apiClientAccessResource) setAccess(ctx context.Context, plan apiClientAccessResourceModel) error {
+//
+// Permission IDs are checked against the API before anything is written, so a
+// plan that names a permission of another API changes nothing. A difference that
+// only shows after the write (a public client) is undone: a new grant is removed,
+// and on an update the grant the client held before is put back. update is true
+// when the resource exists.
+func (r *apiClientAccessResource) setAccess(ctx context.Context, plan apiClientAccessResourceModel, update bool) error {
 	var userIDs, clientIDs []string
 	if diags := plan.UserDelegatedPermissionIDs.ElementsAs(ctx, &userIDs, false); diags.HasError() {
 		return fmt.Errorf("invalid user_delegated_permission_ids: %v", diags)
@@ -334,24 +342,68 @@ func (r *apiClientAccessResource) setAccess(ctx context.Context, plan apiClientA
 		UserDelegatedPermissionIDs: userIDs,
 		ClientPermissionIDs:        clientIDs,
 	}
+	apiID, clientID := plan.APIID.ValueString(), plan.ClientID.ValueString()
+
+	api, err := r.client.GetAPI(apiID)
+	if err != nil {
+		return fmt.Errorf("could not read the API: %w", err)
+	}
+	available := make([]string, 0, len(api.Permissions))
+	for _, permission := range api.Permissions {
+		available = append(available, permission.ID)
+	}
+	var problems []string
+	if missing := missingIDs(wanted.UserDelegatedPermissionIDs, available); len(missing) > 0 {
+		problems = append(problems, "user_delegated_permission_ids are not permissions of the API: "+strings.Join(missing, ", "))
+	}
+	if missing := missingIDs(wanted.ClientPermissionIDs, available); len(missing) > 0 {
+		problems = append(problems, "client_permission_ids are not permissions of the API: "+strings.Join(missing, ", "))
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("client_permission_ids not applied, nothing was changed: %s", strings.Join(problems, "; "))
+	}
+
+	// What the client holds now, to put back if the write does not come out right.
+	var previous *client.APIClientGrant
+	if update {
+		grants, err := r.client.ListClientAPIs(clientID)
+		if err != nil {
+			return fmt.Errorf("could not read the client's current access: %w", err)
+		}
+		for _, grant := range grants {
+			if grant.API.ID == apiID {
+				held := grant.APIClientGrant
+				previous = &held
+			}
+		}
+	}
 
 	tflog.Debug(ctx, "Setting API client access", map[string]any{
-		"api_id":    plan.APIID.ValueString(),
-		"client_id": plan.ClientID.ValueString(),
+		"api_id":    apiID,
+		"client_id": clientID,
 	})
 
-	applied, err := r.client.SetAPIClientAccess(plan.APIID.ValueString(), plan.ClientID.ValueString(), &wanted)
+	applied, err := r.client.SetAPIClientAccess(apiID, clientID, &wanted)
 	if err != nil {
 		return fmt.Errorf("could not set the client's access to the API: %w", err)
 	}
 
-	if problems := grantDifferences(wanted, *applied); len(problems) > 0 {
-		// Do not leave a grant that is not the one that was asked for.
-		_ = r.client.RemoveAPIClientAccess(plan.APIID.ValueString(), plan.ClientID.ValueString())
-		return fmt.Errorf("the access was not applied as asked and the grant was removed: %s", strings.Join(problems, "; "))
+	problems = grantDifferences(wanted, *applied)
+	if len(problems) == 0 {
+		return nil
 	}
 
-	return nil
+	if previous != nil {
+		if _, err := r.client.SetAPIClientAccess(apiID, clientID, previous); err != nil {
+			return fmt.Errorf("the access was not applied as asked (%s), and putting back the previous access failed, so the client's access is now unknown, run a plan: %w", strings.Join(problems, "; "), err)
+		}
+		return fmt.Errorf("the access was not applied as asked and the previous access was put back: %s", strings.Join(problems, "; "))
+	}
+
+	if err := r.client.RemoveAPIClientAccess(apiID, clientID); err != nil {
+		return fmt.Errorf("the access was not applied as asked (%s), and removing the grant failed: %w", strings.Join(problems, "; "), err)
+	}
+	return fmt.Errorf("the access was not applied as asked and the grant was removed: %s", strings.Join(problems, "; "))
 }
 
 // grantDifferences describes how what Pocket-ID applied differs from what was

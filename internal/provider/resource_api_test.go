@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -734,4 +735,140 @@ func testAccClaimContains(claim any, value string) bool {
 		}
 	}
 	return false
+}
+
+// An update that cannot be applied leaves the access the client has: a
+// permission of another API is refused before anything is written.
+func TestAccResourceAPIClientAccess_invalidUpdateKeepsTheAccess(t *testing.T) {
+	resourceName := "pocketid_api_client_access.test"
+	rName := acctest.RandomWithPrefix("tf-acc")
+	config := func(extra string) string {
+		return testAccAPIConfig(rName, "Orders API", `
+resource "pocketid_api_client_access" "test" {
+  api_id    = pocketid_api.test.id
+  client_id = pocketid_client.granted.id
+  client_permission_ids = [
+    pocketid_api.test.permissions["read:orders"].id,`+extra+`
+  ]
+}
+`)
+	}
+
+	var apiID, clientID, readID string
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config(""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCaptureAttr(resourceName, "api_id", &apiID),
+					testAccCaptureAttr(resourceName, "client_id", &clientID),
+					testAccCaptureAttr("pocketid_api.test", "permissions.read:orders.id", &readID),
+				),
+			},
+			{
+				Config:      config(`"00000000-0000-0000-0000-000000000000",`),
+				ExpectError: regexp.MustCompile(`nothing\s+was\s+changed`),
+			},
+			// Checked before the next step refreshes, which would hide a deleted grant.
+			{
+				PreConfig: func() {
+					c, err := testClient()
+					if err != nil {
+						t.Fatal(err)
+					}
+					grants, err := c.ListClientAPIs(clientID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, grant := range grants {
+						if grant.API.ID == apiID && grant.ClientAccess && len(grant.ClientPermissionIDs) == 1 && grant.ClientPermissionIDs[0] == readID {
+							return
+						}
+					}
+					t.Fatalf("the client's access to the API was changed by a refused update: %+v", grants)
+				},
+				Config:   config(""),
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
+// A client registered through a Client ID Metadata Document has a URL for an ID,
+// which Pocket ID reads from a path as "~" and its base64url encoding. A local
+// Pocket ID cannot register one (it fetches the document over https, from a
+// host it trusts), so the test inserts the client row Pocket ID would have made,
+// in the test database. It is skipped when that database or sqlite3 is not at hand.
+func TestAccResourceAPIClientAccess_cimdClient(t *testing.T) {
+	resourceName := "pocketid_api_client_access.test"
+	rName := acctest.RandomWithPrefix("tf-acc")
+	cimdID := "https://" + rName + ".client.example.com/metadata.json"
+
+	dbPath := os.Getenv("POCKETID_TEST_DB")
+	if dbPath == "" {
+		dbPath = "../../test-data/data/pocket-id.db"
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Skipf("no Pocket ID test database at %s (set POCKETID_TEST_DB)", dbPath)
+	}
+	sqlite := func(statement string) error {
+		out, err := exec.Command("sqlite3", "-cmd", ".timeout 15000", dbPath, statement).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("sqlite3: %v: %s", err, out)
+		}
+		return nil
+	}
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 is not installed")
+	}
+	if err := sqlite(fmt.Sprintf(
+		"INSERT INTO oidc_clients (id, created_at, name, callback_urls, is_public, client_type) VALUES ('%s', datetime('now'), 'CIMD test', '[]', 1, 'cimd');", cimdID)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = sqlite(fmt.Sprintf("DELETE FROM oidc_clients WHERE id = '%s';", cimdID))
+	})
+
+	config := fmt.Sprintf(`
+resource "pocketid_api" "test" {
+  name     = "CIMD client test"
+  resource = "https://%[1]s.api.example.com"
+
+  permissions = {
+    "read:orders" = { name = "Read orders" }
+  }
+}
+
+resource "pocketid_api_client_access" "test" {
+  api_id                        = pocketid_api.test.id
+  client_id                     = %[2]q
+  user_delegated_permission_ids = [pocketid_api.test.permissions["read:orders"].id]
+}
+`, rName, cimdID)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "client_id", cimdID),
+					resource.TestCheckResourceAttr(resourceName, "user_delegated_access", "true"),
+					resource.TestCheckResourceAttr(resourceName, "user_delegated_permission_ids.#", "1"),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					return s.RootModule().Resources["pocketid_api.test"].Primary.ID + "/" + cimdID, nil
+				},
+			},
+		},
+	})
 }

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -170,7 +171,7 @@ func (c *Client) SetAPIClientAccess(apiID, clientID string, grant *APIClientGran
 	if req.ClientPermissionIDs == nil {
 		req.ClientPermissionIDs = []string{}
 	}
-	body, err := c.doRequest("PUT", fmt.Sprintf("/api/apis/%s/clients/%s", url.PathEscape(apiID), url.PathEscape(clientID)), req)
+	body, err := c.doRequest("PUT", fmt.Sprintf("/api/apis/%s/clients/%s", url.PathEscape(apiID), clientIDPathSegment(clientID)), req)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +185,7 @@ func (c *Client) SetAPIClientAccess(apiID, clientID string, grant *APIClientGran
 
 // RemoveAPIClientAccess revokes every grant a client holds on one API.
 func (c *Client) RemoveAPIClientAccess(apiID, clientID string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/apis/%s/clients/%s", url.PathEscape(apiID), url.PathEscape(clientID)), nil)
+	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/apis/%s/clients/%s", url.PathEscape(apiID), clientIDPathSegment(clientID)), nil)
 	return err
 }
 
@@ -192,7 +193,7 @@ func (c *Client) RemoveAPIClientAccess(apiID, clientID string) error {
 // client's grants on each. Pocket-ID has no endpoint for one client's grant on
 // one API, so a grant is read from this list.
 func (c *Client) ListClientAPIs(clientID string) ([]ClientAPIGrant, error) {
-	body, err := c.doRequest("GET", fmt.Sprintf("/api/api-access/%s/apis", url.PathEscape(clientID)), nil)
+	body, err := c.doRequest("GET", fmt.Sprintf("/api/api-access/%s/apis", clientIDPathSegment(clientID)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -210,4 +211,24 @@ func unmarshalAPI(body []byte) (*API, error) {
 		return nil, fmt.Errorf("error unmarshaling response: %w", err)
 	}
 	return &result, nil
+}
+
+// clientIDPathSegment returns a client ID as Pocket-ID reads it from a URL
+// path. A client ID made of letters, digits, '.', '_' and '-' goes in as is. The
+// ID of a client registered through a Client ID Metadata Document is a URL,
+// which cannot be carried in one path segment, so it is sent as "~" and its
+// unpadded base64url encoding, which Pocket-ID decodes
+// (backend/internal/middleware/client_id_param.go).
+func clientIDPathSegment(clientID string) string {
+	plain := clientID != ""
+	for _, r := range clientID {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return clientID
+	}
+	return "~" + base64.RawURLEncoding.EncodeToString([]byte(clientID))
 }
