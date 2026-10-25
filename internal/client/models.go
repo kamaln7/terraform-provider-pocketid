@@ -148,7 +148,7 @@ type User struct {
 type UserCreateRequest struct {
 	ID            string  `json:"id,omitempty"`
 	Username      string  `json:"username"`
-	Email         string  `json:"email"`
+	Email         string  `json:"email,omitempty"`
 	FirstName     string  `json:"firstName,omitempty"`
 	LastName      string  `json:"lastName,omitempty"`
 	DisplayName   string  `json:"displayName,omitempty"`

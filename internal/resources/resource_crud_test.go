@@ -166,7 +166,7 @@ func TestUserResource_SchemaValidation(t *testing.T) {
 
 	emailAttr, ok := attrs["email"].(schema.StringAttribute)
 	assert.True(t, ok, "email should be StringAttribute")
-	assert.True(t, emailAttr.Required, "email should be required")
+	assert.True(t, emailAttr.Optional, "email should be optional")
 
 	// Computed attributes
 	idAttr, ok := attrs["id"].(schema.StringAttribute)

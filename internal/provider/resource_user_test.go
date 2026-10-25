@@ -803,3 +803,146 @@ func TestAccResourceUser_profilePictureRejected(t *testing.T) {
 		},
 	})
 }
+
+// setRequireUserEmail sets Pocket ID's "require user email" setting for the
+// rest of the test and restores the previous value afterwards.
+func setRequireUserEmail(t *testing.T, value string) {
+	t.Helper()
+
+	c, err := testClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := c.GetApplicationConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previous := cfg.RequireUserEmail
+	set := func(v string) error {
+		current, err := c.GetApplicationConfig()
+		if err != nil {
+			return err
+		}
+		current.RequireUserEmail = v
+		_, err = c.UpdateApplicationConfig(current)
+		return err
+	}
+	if err := set(value); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := set(previous); err != nil {
+			t.Errorf("restoring require_user_email: %v", err)
+		}
+	})
+}
+
+func testAccResourceUserConfig_withoutEmail(username, displayName, extra string) string {
+	return fmt.Sprintf(`
+resource "pocketid_user" "test" {
+  username     = %[1]q
+  display_name = %[2]q
+%[3]s}
+`, username, displayName, extra)
+}
+
+// TestAccResourceUser_withoutEmail checks a user with only a username and a
+// display name, which Pocket ID accepts once it no longer requires emails.
+func TestAccResourceUser_withoutEmail(t *testing.T) {
+	resourceName := "pocketid_user.test"
+
+	setRequireUserEmail(t, "false")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceUserConfig_withoutEmail("no-email-user", "No Email", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "username", "no-email-user"),
+					resource.TestCheckResourceAttr(resourceName, "display_name", "No Email"),
+					resource.TestCheckNoResourceAttr(resourceName, "email"),
+					resource.TestCheckNoResourceAttr(resourceName, "first_name"),
+					resource.TestCheckNoResourceAttr(resourceName, "last_name"),
+					resource.TestCheckResourceAttr(resourceName, "is_admin", "false"),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			// Make the user an administrator and change the display name.
+			{
+				Config: testAccResourceUserConfig_withoutEmail("no-email-user", "No Email Renamed", "  is_admin     = true\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "display_name", "No Email Renamed"),
+					resource.TestCheckResourceAttr(resourceName, "is_admin", "true"),
+					resource.TestCheckNoResourceAttr(resourceName, "email"),
+				),
+			},
+			// Add an email, then remove it again.
+			{
+				Config: testAccResourceUserConfig_withoutEmail("no-email-user", "No Email Renamed", "  email        = \"no-email@example.com\"\n"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "email", "no-email@example.com"),
+				),
+			},
+			{
+				Config: testAccResourceUserConfig_withoutEmail("no-email-user", "No Email Renamed", ""),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr(resourceName, "email"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccResourceUser_withoutEmailTwoUsers checks that two users without an
+// email do not collide.
+func TestAccResourceUser_withoutEmailTwoUsers(t *testing.T) {
+	setRequireUserEmail(t, "false")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+resource "pocketid_user" "a" {
+  username     = "no-email-a"
+  display_name = "No Email A"
+}
+
+resource "pocketid_user" "b" {
+  username     = "no-email-b"
+  display_name = "No Email B"
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("pocketid_user.a", "email"),
+					resource.TestCheckNoResourceAttr("pocketid_user.b", "email"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccResourceUser_emailRequired checks that Pocket ID's refusal of a user
+// without an email, while it requires one, is reported.
+func TestAccResourceUser_emailRequired(t *testing.T) {
+	setRequireUserEmail(t, "true")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccResourceUserConfig_withoutEmail("email-required", "Email Required", ""),
+				ExpectError: regexp.MustCompile(`Email is required`),
+			},
+		},
+	})
+}

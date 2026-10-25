@@ -413,3 +413,25 @@ func TestClient_ListUserGroups_Error(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+func TestClient_CreateUser_OmitsEmptyEmail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+
+		// Pocket ID rejects an empty email, so a user without one sends none.
+		assert.NotContains(t, body, "email")
+		assert.Equal(t, "no-email", body["username"])
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"user-1","username":"no-email","email":null,"displayName":"No Email"}`)
+	}))
+	defer server.Close()
+
+	c, err := client.NewClient(server.URL, "test-token", false, 30)
+	require.NoError(t, err)
+
+	user, err := c.CreateUser(&client.UserCreateRequest{Username: "no-email", DisplayName: "No Email"})
+	require.NoError(t, err)
+	assert.Equal(t, "", user.Email)
+}

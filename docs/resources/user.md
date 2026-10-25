@@ -112,7 +112,19 @@ resource "pocketid_user" "with_picture" {
     source = "${path.module}/avatars/picture.user.png"
   }
 }
+
+# Create a user without an email. Pocket ID accepts this only when it does not
+# require user emails (the `require_user_email` application setting, or
+# `REQUIRE_USER_EMAIL=false`).
+resource "pocketid_user" "no_email" {
+  username     = "no.email"
+  display_name = "No Email"
+}
 ```
+
+## Email
+
+`email` is optional so that a user can exist with only a username and a display name. Pocket ID refuses such a user while it requires emails, and the error is reported when the user is created or updated. Removing `email` from a user that has one clears it.
 
 ## Profile picture
 
@@ -124,7 +136,6 @@ resource "pocketid_user" "with_picture" {
 
 ### Required
 
-- `email` (String) The email address of the user.
 - `username` (String) The username for the user. Must be unique.
 
 ### Optional
@@ -132,6 +143,7 @@ resource "pocketid_user" "with_picture" {
 - `custom_claims` (Map of String) Custom claims to include in the user's OIDC tokens, as a map of claim name to value. Setting this attribute replaces all custom claims for the user. Reserved claim names (e.g. `email`, `groups`, `sub`) are rejected by Pocket-ID.
 - `disabled` (Boolean) Whether the user account is disabled. Defaults to false.
 - `display_name` (String) The display name of the user. Computed from first and last name if not set.
+- `email` (String) The email address of the user. Only optional when Pocket-ID does not require user emails (the `require_user_email` application setting, or `REQUIRE_USER_EMAIL=false`).
 - `email_verified` (Boolean) Whether the user's email address is verified. Defaults to false.
 - `first_name` (String) The first name of the user.
 - `groups` (Set of String) List of group IDs the user belongs to.
