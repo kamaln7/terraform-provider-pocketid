@@ -68,6 +68,11 @@ func TestClientResource_Schema(t *testing.T) {
 	assert.True(t, skipConsentAttr.IsOptional(), "skip_consent should be optional")
 	assert.True(t, skipConsentAttr.IsComputed(), "skip_consent should be computed so an unset value is read back")
 
+	clientIDAttr, ok := schemaResponse.Schema.Attributes["client_id"]
+	assert.True(t, ok, "client_id attribute should exist")
+	assert.True(t, clientIDAttr.IsOptional(), "client_id should be optional")
+	assert.True(t, clientIDAttr.IsComputed(), "client_id should be computed so a generated or imported ID is kept")
+
 	fedAttr, ok := schemaResponse.Schema.Attributes["federated_identities"]
 	assert.True(t, ok, "federated_identities attribute should exist")
 	assert.True(t, fedAttr.IsOptional(), "federated_identities should be optional")

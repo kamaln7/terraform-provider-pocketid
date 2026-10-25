@@ -212,7 +212,7 @@ output "spa_client_id" {
 
 - `allowed_user_groups` (Set of String) Set of user group IDs that are allowed to use this client. If empty, all users can use this client.
 - `callback_urls` (List of String) List of allowed callback URLs for the OIDC client. Clients that only use the `client_credentials` grant, such as a service account, have none.
-- `client_id` (String) The client ID to use for the OIDC client. If not set, one will be generated. Must be between 2 and 128 characters.
+- `client_id` (String) The client ID of the OIDC client. If not set, Pocket ID generates one. Changing it replaces the client. Must be between 2 and 128 characters and contain only letters, digits, `.`, `_` and `-`.
 - `client_secret` (String, Sensitive) The client secret for non-public clients. Only available during resource creation for non-public clients.When specified, it must have at least a length of 16 and consist only of printable ASCII characters.It is recommended to leave this empty and let Pocket ID automatically generate a secret.
 - `dark_logo_url` (String) URL of the client's dark-mode logo, downloaded by Pocket ID. When not set, a logo added outside Terraform is left untouched; removing a URL that Terraform set deletes the logo.
 - `federated_identities` (Attributes List) List of federated identities (workload identity federation) allowed to authenticate as this client. (see [below for nested schema](#nestedatt--federated_identities))

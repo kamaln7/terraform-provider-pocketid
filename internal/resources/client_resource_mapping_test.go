@@ -89,6 +89,7 @@ func TestMapAPIClientToModel(t *testing.T) {
 	model := mapAPIClientToModel(ctx, api)
 
 	assert.Equal(t, "client-1", model.ID.ValueString())
+	assert.Equal(t, "client-1", model.ClientID.ValueString())
 	assert.Equal(t, "API Client", model.Name.ValueString())
 	assert.Equal(t, true, model.RequiresReauthentication.ValueBool())
 	assert.True(t, model.SkipConsent.ValueBool())

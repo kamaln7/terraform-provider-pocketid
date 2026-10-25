@@ -147,10 +147,20 @@ func (r *clientResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				},
 			},
 			"client_id": schema.StringAttribute{
-				Description: "The client ID to use for the OIDC client. If not set, one will be generated. Must be between 2 and 128 characters.",
-				Optional:    true,
+				Description: "The client ID of the OIDC client. If not set, Pocket ID generates one. Changing it replaces the " +
+					"client. Must be between 2 and 128 characters and contain only letters, digits, `.`, `_` and `-`.",
+				Optional: true,
+				Computed: true,
 				Validators: []validator.String{
 					stringvalidator.LengthBetween(2, 128), // Matches the API binding (min=2, max=128)
+					stringvalidator.RegexMatches(
+						regexp.MustCompile(`^[a-zA-Z0-9._-]+$`), // Matches the API's client_id validation
+						"Client ID must contain only letters, digits, '.', '_' and '-'",
+					),
+				},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplaceIfConfigured(),
 				},
 			},
 			"client_secret": schema.StringAttribute{
@@ -406,6 +416,7 @@ func (r *clientResource) Create(ctx context.Context, req resource.CreateRequest,
 	// Map API response to Terraform model and preserve fields
 	apiModel := mapAPIClientToModel(ctx, clientResp)
 	plan.ID = apiModel.ID
+	plan.ClientID = apiModel.ClientID
 	plan.HasLogo = apiModel.HasLogo
 	plan.RequiresReauthentication = apiModel.RequiresReauthentication
 	plan.SkipConsent = apiModel.SkipConsent
@@ -526,6 +537,7 @@ func (r *clientResource) Read(ctx context.Context, req resource.ReadRequest, res
 	}
 
 	// Update state from API response
+	state.ClientID = types.StringValue(clientResp.ID)
 	state.Name = types.StringValue(clientResp.Name)
 	state.IsPublic = types.BoolValue(clientResp.IsPublic)
 	state.PkceEnabled = types.BoolValue(clientResp.PkceEnabled)
@@ -688,10 +700,6 @@ func (r *clientResource) Update(ctx context.Context, req resource.UpdateRequest,
 		SkipConsent:       plan.SkipConsent.ValueBool(),
 		IsGroupRestricted: isGroupRestricted,
 		Credentials:       buildCredentialsFromPlan(ctx, &plan),
-	}
-	if !plan.ClientID.IsNull() && !plan.ClientID.IsUnknown() && plan.ClientID.ValueString() != "" {
-		cid := plan.ClientID.ValueString()
-		updateReq.ClientID = &cid
 	}
 
 	// The update endpoint replaces the client in full, so settings the
@@ -1051,6 +1059,7 @@ func optionalString(value string) types.String {
 func mapAPIClientToModel(ctx context.Context, api *client.OIDCClient) clientResourceModel {
 	var model clientResourceModel
 	model.ID = types.StringValue(api.ID)
+	model.ClientID = types.StringValue(api.ID)
 	model.Name = types.StringValue(api.Name)
 	model.IsPublic = types.BoolValue(api.IsPublic)
 	model.PkceEnabled = types.BoolValue(api.PkceEnabled)

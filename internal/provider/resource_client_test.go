@@ -1177,3 +1177,100 @@ func TestAccResourceClient_noCallbackURLs(t *testing.T) {
 		},
 	})
 }
+
+func testAccResourceClientConfig_clientID(clientID string) string {
+	var attr string
+	if clientID != "" {
+		attr = fmt.Sprintf("  client_id     = %q\n", clientID)
+	}
+	return fmt.Sprintf(`
+resource "pocketid_client" "test" {
+  name          = "client-id-test"
+  callback_urls = ["https://example.com/callback"]
+%[1]s}
+`, attr)
+}
+
+// TestAccResourceClient_clientID checks the lifecycle of a custom client ID:
+// it becomes the client's id, survives import, is kept when dropped from the
+// configuration and replaces the client when changed.
+func TestAccResourceClient_clientID(t *testing.T) {
+	resourceName := "pocketid_client.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceClientConfig_clientID("client-id.test_1"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "client_id", "client-id.test_1"),
+					resource.TestCheckResourceAttr(resourceName, "id", "client-id.test_1"),
+				),
+			},
+			// Importing by id fills client_id, so the configured value is no
+			// difference.
+			{
+				ResourceName:            resourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"client_secret", "client_secret_id"},
+			},
+			// Not set: the client keeps the ID it has.
+			{
+				Config: testAccResourceClientConfig_clientID(""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.TestCheckResourceAttr(resourceName, "client_id", "client-id.test_1"),
+			},
+			// Changed: a client's ID cannot change, so the client is replaced.
+			{
+				Config: testAccResourceClientConfig_clientID("client-id.test_2"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionDestroyBeforeCreate),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr(resourceName, "client_id", "client-id.test_2"),
+					resource.TestCheckResourceAttr(resourceName, "id", "client-id.test_2"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccResourceClient_generatedClientID checks that a client created without
+// a client_id reports the ID Pocket ID generated.
+func TestAccResourceClient_generatedClientID(t *testing.T) {
+	resourceName := "pocketid_client.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccResourceClientConfig_clientID(""),
+				Check: resource.TestCheckResourceAttrPair(
+					resourceName, "client_id", resourceName, "id",
+				),
+			},
+		},
+	})
+}
+
+// TestAccResourceClient_invalidClientID checks that an ID Pocket ID would
+// refuse is reported when planning.
+func TestAccResourceClient_invalidClientID(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccResourceClientConfig_clientID("not valid/id"),
+				ExpectError: regexp.MustCompile(`Client ID must contain only letters, digits`),
+			},
+		},
+	})
+}
